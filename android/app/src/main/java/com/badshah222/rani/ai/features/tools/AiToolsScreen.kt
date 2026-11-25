@@ -53,7 +53,7 @@ class AiToolsViewModel(app: Application) : AndroidViewModel(app) {
     fun runTool(tool: RaniTools.AiTool, input: String) {
         val x = input.trim()
         if (tool.name == "Analyze File") { /* handled by runAnalyzeFile */ return }
-        if (x.isEmpty()) { error.value = "Pehle kuch likho, Babu Jaan."; return }
+        if (x.isEmpty()) { error.value = "Write something first."; return }
         busy.value = true; error.value = null; result.value = null; imageBytes.value = null
         viewModelScope.launch {
             try {
@@ -61,26 +61,27 @@ class AiToolsViewModel(app: Application) : AndroidViewModel(app) {
                     "Generate Image" -> {
                         val bytes = runCatching { c.ai.generateImage(x) }.getOrElse {
                             // Free fallback: the Pollinations URL renders the picture.
-                            result.value = "Gemini image nahi bana saka — free image dikha rahi hoon:\n${Pollinations.imageUrl(x)}"
+                            result.value = "Gemini could not create the image — showing a free image instead:\n${Pollinations.imageUrl(x)}"
                             return@launch
                         }
                         val dir = File(getApplication<Application>().cacheDir, "images").apply { mkdirs() }
                         val f = File(dir, "tool_${System.currentTimeMillis()}.jpg").apply { writeBytes(bytes) }
                         imageBytes.value = bytes
-                        result.value = "Image tayyar hai, Babu Jaan. Saved: ${f.name}"
+                        result.value = "Image is ready. Saved: ${f.name}"
                     }
                     "Create PDF" -> {
                         val reply = c.ai.chat(listOf(ChatMessage("user", tool.template.replace("{x}", x))))
                         val path = writePdf(tool.name, reply.text)
-                        result.value = "PDF tayyar hai, Babu Jaan.\n${reply.text.take(600)}\n\nSaved: $path"
+                        result.value = "PDF is ready.\n${reply.text.take(600)}\n\nSaved: $path"
                     }
                     else -> {
                         val reply = c.ai.chat(listOf(ChatMessage("user", tool.template.replace("{x}", x))))
                         result.value = reply.text
                     }
                 }
+                runCatching { c.cloud.recordActivity(c.auth.current?.uid, "command", mapOf("tool" to "ai_tools")) }
             } catch (e: AiException) { error.value = e.userMessage }
-            catch (e: Exception) { error.value = "Kuch ghalat ho gaya: ${e.message?.take(120)}" }
+            catch (e: Exception) { error.value = "Something went wrong: ${e.message?.take(120)}" }
             finally { busy.value = false }
         }
     }
@@ -92,8 +93,9 @@ class AiToolsViewModel(app: Application) : AndroidViewModel(app) {
                 val text = runCatching { file.readText().take(6000) }.getOrElse { "[binary file: ${file.name}]" }
                 val reply = c.ai.chat(listOf(ChatMessage("user", RaniTools.aiTools[5].template.replace("{x}", "${file.name}:\n$text"))))
                 result.value = reply.text
+                runCatching { c.cloud.recordActivity(c.auth.current?.uid, "command", mapOf("tool" to "ai_tools_file")) }
             } catch (e: AiException) { error.value = e.userMessage }
-            catch (e: Exception) { error.value = "File parh nahi saki: ${e.message?.take(120)}" }
+            catch (e: Exception) { error.value = "Could not read the file: ${e.message?.take(120)}" }
             finally { busy.value = false }
         }
     }
@@ -126,7 +128,7 @@ class AiToolsViewModel(app: Application) : AndroidViewModel(app) {
                 put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
             }
             val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: throw IllegalStateException("Downloads nahi khul saka")
+                ?: throw IllegalStateException("Downloads could not be opened")
             ctx.contentResolver.openOutputStream(uri)?.use { doc.writeTo(it) }
             doc.close()
             "Downloads/$name"
@@ -163,7 +165,7 @@ fun AiToolsScreen(vm: AiToolsViewModel, onBack: () -> Unit) {
         TopBar("AI Tools", onBack)
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
             item {
-                Text("MYRA ke AI Tools — RANI ke saath", style = MaterialTheme.typography.bodyMedium, color = Mute)
+                Text("AI Tools — with RANI", style = MaterialTheme.typography.bodyMedium, color = Mute)
                 LazyVerticalGrid(GridCells.Fixed(2), Modifier.height(300.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(RaniTools.aiTools) { t ->
                         Card({ selected = t; input = ""; vm.result.value = null; vm.imageBytes.value = null }, colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(18.dp)) {
@@ -181,7 +183,7 @@ fun AiToolsScreen(vm: AiToolsViewModel, onBack: () -> Unit) {
                             Text(tool.name, style = MaterialTheme.typography.titleMedium, color = VioletSoft)
                             if (tool.name == "Analyze File") {
                                 Text("Apni banayi hui files mein se chuno:", style = MaterialTheme.typography.bodySmall, color = Mute)
-                                if (files.isEmpty()) Text("Abhi koi file nahi hai — pehle WebForge ya Image Studio se kuch banao.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                                if (files.isEmpty()) Text("No files yet — create something with WebForge or Image Studio first.", style = MaterialTheme.typography.bodySmall, color = Mute)
                                 files.forEach { f ->
                                     OutlinedButton({ vm.runAnalyzeFile(f) }, Modifier.fillMaxWidth()) { Text(f.name, maxLines = 1) }
                                 }

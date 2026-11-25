@@ -122,7 +122,7 @@ fun SecretChatScreen(vm: SecretChatViewModel, onBack: () -> Unit, onNav: (String
                     Modifier.padding(top = 8.dp), color = Mute, style = MaterialTheme.typography.bodySmall,
                 )
                 OutlinedTextField(pw, { pw = it }, Modifier.fillMaxWidth().padding(top = 20.dp), label = { Text("Password") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
-                if (wrong) Text("Password ghalat hai.", Modifier.padding(top = 8.dp), color = Bad, style = MaterialTheme.typography.bodySmall)
+                if (wrong) Text("Wrong password.", Modifier.padding(top = 8.dp), color = Bad, style = MaterialTheme.typography.bodySmall)
                 Button({ vm.tryUnlock(pw) }, Modifier.fillMaxWidth().padding(top = 14.dp)) { Text("Unlock") }
                 Spacer(Modifier.weight(1f))
                 Button(
@@ -163,7 +163,7 @@ fun SecretChatScreen(vm: SecretChatViewModel, onBack: () -> Unit, onNav: (String
                 OutlinedButton({ onNav("screen") }) { Icon(Icons.Default.ScreenShare, null, Modifier.size(16.dp)); Text(" Screen", style = MaterialTheme.typography.bodySmall) }
             }
             Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(input, { input = it }, Modifier.weight(1f), placeholder = { Text("Heavy kaam likho…") }, maxLines = 4)
+                OutlinedTextField(input, { input = it }, Modifier.weight(1f), placeholder = { Text("Write the heavy work…") }, maxLines = 4)
                 FilledIconButton({ val t = input; input = ""; vm.send(t) }, enabled = input.isNotBlank() && !busy) { Icon(Icons.AutoMirrored.Filled.Send, "Send") }
             }
         }

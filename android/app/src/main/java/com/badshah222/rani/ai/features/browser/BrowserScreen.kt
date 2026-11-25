@@ -36,7 +36,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Reads a web page's text and explains it in the user's own mix, out loud as well. */
     fun summarize(pageText: String) {
-        if (pageText.isBlank()) { summary.value = "Is page par parhne layak text nahi mila, Babu Jaan."; return }
+        if (pageText.isBlank()) { summary.value = "No readable text found on this page."; return }
         viewModelScope.launch {
             busy.value = true
             try {
@@ -46,7 +46,7 @@ class BrowserViewModel(app: Application) : AndroidViewModel(app) {
                 summary.value = r.text
                 c.tts.speak(r.text)
             } catch (e: Exception) {
-                summary.value = "Page parh liya, lekin samjhane mein masla aya: ${e.message?.take(90)}"
+                summary.value = "I read the page, but could not explain it: ${e.message?.take(90)}"
             } finally { busy.value = false }
         }
     }
@@ -97,7 +97,7 @@ fun BrowserScreen(home: HomeViewModel, vm: BrowserViewModel, onBack: () -> Unit)
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 address, { address = it }, Modifier.weight(1f), singleLine = true,
-                placeholder = { Text("Search karo ya website likho…") },
+                placeholder = { Text("Search or type a website…") },
                 shape = RoundedCornerShape(14.dp),
             )
             Button({ load(address) }, shape = RoundedCornerShape(14.dp)) { Text("Go") }
@@ -111,10 +111,10 @@ fun BrowserScreen(home: HomeViewModel, vm: BrowserViewModel, onBack: () -> Unit)
                     val text = runCatching { org.json.JSONTokener(result).nextValue() as? String }.getOrNull().orEmpty()
                     vm.summarize(text)
                 }
-            }) { Icon(Icons.Default.MenuBook, "Page parh kar samjhao") }
-            if (summary != null) IconButton({ vm.stopSpeaking() }) { Icon(Icons.Default.Stop, "Bolna band karo") }
+            }) { Icon(Icons.Default.MenuBook, "Read this page and explain it") }
+            if (summary != null) IconButton({ vm.stopSpeaking() }) { Icon(Icons.Default.Stop, "Stop speaking") }
             Text(
-                "📖 button = page parh kar samjhao + sunao",
+                "📖 button = read the page, explain it, and read it out loud",
                 Modifier.padding(start = 6.dp, top = 12.dp), color = Mute, style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -138,7 +138,7 @@ fun BrowserScreen(home: HomeViewModel, vm: BrowserViewModel, onBack: () -> Unit)
             ) {
                 Column(Modifier.padding(14.dp).heightIn(max = 180.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(summary!!, style = MaterialTheme.typography.bodyMedium)
-                    TextButton({ vm.clearSummary() }) { Text("Band karo") }
+                    TextButton({ vm.clearSummary() }) { Text("Close") }
                 }
             }
         }

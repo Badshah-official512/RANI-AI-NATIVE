@@ -61,7 +61,7 @@ class ScreenGuardianService : Service() {
         val notif: Notification = NotificationCompat.Builder(this, "guardian")
             .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
             .setContentTitle("RANI AI — Screen Guardian ON hai")
-            .setContentText("Sirf tumhari shared screen par nazar — password / bank / OTP par warning degi.")
+            .setContentText("Watching only your shared screen — warns about password / bank / OTP.")
             .setContentIntent(open).setOngoing(true).build()
         startForeground(44, notif)
         val app = application as RaniApp
@@ -104,6 +104,7 @@ class ScreenGuardianService : Service() {
         val now = System.currentTimeMillis()
         if (seen == lastWarningText && now - lastWarningAt < 5 * 60 * 1000L) return // duplicate suppression
         lastWarningText = seen; lastWarningAt = now
+        runCatching { app.container.cloud.recordActivity(app.container.auth.current?.uid, "safety_alert", mapOf("reason" to "screen_sensitive")) }
         val warn = "Babu Jaan, screen par sensitive cheez dikh rahi hai — main usay parh kar nahi sunaungi. Agar password ya bank ka kaam hai to pehle screen share band kar lo."
         app.container.tts.speak(warn)
         val nm = getSystemService(NotificationManager::class.java)

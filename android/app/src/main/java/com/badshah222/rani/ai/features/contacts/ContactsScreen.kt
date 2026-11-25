@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.badshah222.rani.ai.RaniApp
 import com.badshah222.rani.ai.data.phone.ContactEntry
 import com.badshah222.rani.ai.data.phone.ContactsHelper
 import com.badshah222.rani.ai.features.settings.TopBar
@@ -42,6 +43,7 @@ import java.net.URLEncoder
  * leave the phone. Tap a contact to call, WhatsApp or SMS them.
  */
 class ContactsViewModel(app: Application) : AndroidViewModel(app) {
+    private val c = (app as RaniApp).container
     val contacts = MutableStateFlow<List<ContactEntry>>(emptyList())
     val loading = MutableStateFlow(false)
 
@@ -53,6 +55,8 @@ class ContactsViewModel(app: Application) : AndroidViewModel(app) {
             val list = withContext(Dispatchers.IO) { ContactsHelper.loadAll(ctx) }
             contacts.value = list
             loading.value = false
+            // Hisab kitab: count only — contacts data never leaves the phone.
+            runCatching { c.cloud.recordActivity(c.auth.current?.uid, "contacts_read", mapOf("count" to list.size)) }
         }
     }
 }
@@ -75,14 +79,14 @@ fun ContactsScreen(vm: ContactsViewModel, onBack: () -> Unit) {
         TopBar("Contacts", onBack)
         if (!granted.value) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("RANI tumhare saare contacts isi phone par parh sakti hai — taake naam se call ya message kar sake.", style = MaterialTheme.typography.bodyMedium)
-                Text("Contacts kabhi upload nahi hote aur kabhi phone se bahar nahi jate.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("RANI can read all your contacts on this phone — so she can call or message by name.", style = MaterialTheme.typography.bodyMedium)
+                Text("Contacts are never uploaded and never leave the phone.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Button({ launcher.launch(Manifest.permission.READ_CONTACTS) }) { Text("Allow contacts") }
             }
             return@Column
         }
         OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
-            placeholder = { Text("Naam dhoondo…") }, singleLine = true)
+            placeholder = { Text("Search names…") }, singleLine = true)
         Text("${contacts.size} contacts — sirf is phone par", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), color = Mute, style = MaterialTheme.typography.bodySmall)
         if (loading) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -104,7 +108,7 @@ fun ContactsScreen(vm: ContactsViewModel, onBack: () -> Unit) {
                     }
                 }
             }
-            if (shown.isEmpty()) item { Text("Koi contact nahi mila.", Modifier.padding(16.dp), color = Mute) }
+            if (shown.isEmpty()) item { Text("No contact found.", Modifier.padding(16.dp), color = Mute) }
         }
     }
     selected?.let { c ->

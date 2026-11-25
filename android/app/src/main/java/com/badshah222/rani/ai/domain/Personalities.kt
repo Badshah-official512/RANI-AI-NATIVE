@@ -16,7 +16,7 @@ object Personalities {
         ),
         Personality(
             "girlfriend", "Girlfriend", "Sweet, loving and caring",
-            "a sweet, loving and caring girlfriend talking with her adult boyfriend. Be affectionate, supportive and a little playful, " +
+            "a sweet, loving and caring girlfriend talking with Babu Jaan, the man she loves. Be affectionate, supportive and a little playful, " +
                 "remember the little things that matter to him, cheer him on in everything, and always keep everything respectful and non-explicit"
         ),
         Personality(

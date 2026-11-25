@@ -72,7 +72,7 @@ fun PermissionsScreen(onBack: () -> Unit) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("Accessibility — full control", style = MaterialTheme.typography.titleMedium)
-                            Text("Type, send, screen parhna, scroll, buttons tap — sirf tumhari command par. Is ke baghair \"message likho aur bhejo\" nahi chalega.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                            Text("Type, send, read the screen, scroll, tap buttons — only on your command. Without it, \"type and send a message\" will not work.", style = MaterialTheme.typography.bodySmall, color = Mute)
                         }
                         if (tick >= 0 && RaniAccessibilityService.isEnabled(ctx)) Text("ON ✓", color = Ok)
                         else Button({ ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("Open") }
@@ -80,7 +80,7 @@ fun PermissionsScreen(onBack: () -> Unit) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("Floating orb (overlay)", style = MaterialTheme.typography.titleMedium)
-                            Text("Doosri apps ke upar chhota orb — tap karo to voice call.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                            Text("A small orb over other apps — tap it for a voice call.", style = MaterialTheme.typography.bodySmall, color = Mute)
                         }
                         if (tick >= 0 && Settings.canDrawOverlays(ctx)) Text("ON ✓", color = Ok)
                         else Button({ ctx.startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + ctx.packageName))) }) { Text("Open") }

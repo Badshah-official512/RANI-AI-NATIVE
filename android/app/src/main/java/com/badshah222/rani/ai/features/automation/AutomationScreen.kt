@@ -69,7 +69,7 @@ class AutomationViewModel(app: Application) : AndroidViewModel(app) {
                 Settings.System.putInt(ctx.contentResolver, Settings.System.SCREEN_BRIGHTNESS, (b * 255 / 100).coerceIn(10, 255))
             } else {
                 ctx.startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                status.value = "Brightness ke liye pehle RANI ko 'Modify system settings' ki permission do."
+                status.value = "To change brightness, first give RANI the 'Modify system settings' permission."
                 return
             }
         }
@@ -103,7 +103,7 @@ fun AutomationScreen(vm: AutomationViewModel, onBack: () -> Unit) {
                 }
             }
             status?.let { item { Text(it, color = Ok, style = MaterialTheme.typography.bodySmall) } }
-            item { Text("Routines — MYRA style", style = MaterialTheme.typography.titleMedium, color = Gold, modifier = Modifier.padding(top = 8.dp)) }
+            item { Text("Routines", style = MaterialTheme.typography.titleMedium, color = Gold, modifier = Modifier.padding(top = 8.dp)) }
             items(RaniTools.routines) { r ->
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp)) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {

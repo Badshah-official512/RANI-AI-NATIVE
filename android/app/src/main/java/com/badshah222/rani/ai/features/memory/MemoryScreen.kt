@@ -51,10 +51,10 @@ class MemoryViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrDefault(emptyMap())
     }
     fun addDay(name: String, month: Int, day: Int) {
-        val n = name.trim(); if (n.isEmpty() || month !in 1..12 || day !in 1..31) { status.value = "Naam aur sahi tareekh (mahina 1-12, din 1-31) likho."; return }
+        val n = name.trim(); if (n.isEmpty() || month !in 1..12 || day !in 1..31) { status.value = "Write a name and a valid date (month 1-12, day 1-31)."; return }
         val arr = JSONArray(c.store.specialDaysJson)
         arr.put(JSONObject().put("name", n).put("month", month).put("day", day))
-        c.store.specialDaysJson = arr.toString(); load(); status.value = "$n save kar liya, Babu Jaan — us din pehle wish karungi. 💜"
+        c.store.specialDaysJson = arr.toString(); load(); status.value = "Saved $n — I will wish you first on that day. 💜"
     }
     fun deleteDay(i: Int) {
         val arr = JSONArray(c.store.specialDaysJson)
@@ -80,7 +80,7 @@ class MemoryViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             uid?.let { c.chats.clear(it) }
             c.store.specialDaysJson = "[]"; c.store.favouritesJson = "{}"; c.store.tasksJson = "[]"
-            load(); status.value = "Sab bhool gayi, Babu Jaan. Naye sire se shuru karte hain. 💜"
+            load(); status.value = "I forgot everything. Let us start fresh. 💜"
         }
     }
 }
@@ -96,9 +96,9 @@ fun MemoryScreen(vm: MemoryViewModel, onBack: () -> Unit) {
         TopBar("Memory", onBack)
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
             item {
-                Text("RANI tumhari baatein, pasandeeda cheezein aur khaas din yaad rakhti hai — sirf is phone par. Kabhi upload nahi hoti.", color = Mute, style = MaterialTheme.typography.bodyMedium)
+                Text("RANI remembers your conversations, favourites and special days — on this phone only. Nothing is ever uploaded.", color = Mute, style = MaterialTheme.typography.bodyMedium)
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Yaad rakhna ON hai", Modifier.weight(1f)); Switch(memoryOn, vm::setMemoryOn) }
-                Row(verticalAlignment = Alignment.CenterVertically) { Text("Save karne se pehle poochna", Modifier.weight(1f)); Switch(askFirst, vm::setMemoryAskFirst) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Ask before saving", Modifier.weight(1f)); Switch(askFirst, vm::setMemoryAskFirst) }
                 status?.let { Text(it, color = Ok, style = MaterialTheme.typography.bodySmall) }
             }
             item { Text("Special days", style = MaterialTheme.typography.titleMedium, color = Gold) }
@@ -136,7 +136,7 @@ fun MemoryScreen(vm: MemoryViewModel, onBack: () -> Unit) {
                 }
             }
             item {
-                OutlinedButton({ confirmForget = true }, Modifier.fillMaxWidth(), colors = ButtonDefaults.outlinedButtonColors(contentColor = Bad)) { Text("Sab bhool jao — memory delete karo") }
+                OutlinedButton({ confirmForget = true }, Modifier.fillMaxWidth(), colors = ButtonDefaults.outlinedButtonColors(contentColor = Bad)) { Text("Forget everything — delete memory") }
             }
         }
     }
@@ -144,8 +144,8 @@ fun MemoryScreen(vm: MemoryViewModel, onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { confirmForget = false },
             title = { Text("Sab bhool jao?") },
-            text = { Text("Chat history, special days, favourites aur tasks — sab delete ho jayega. Ye wapas nahi aayega.") },
-            confirmButton = { TextButton({ confirmForget = false; vm.forgetEverything() }) { Text("Haan, sab delete karo", color = Bad) } },
+            text = { Text("Chat history, special days, favourites and tasks — all will be deleted. This cannot be undone.") },
+            confirmButton = { TextButton({ confirmForget = false; vm.forgetEverything() }) { Text("Yes, delete everything", color = Bad) } },
             dismissButton = { TextButton({ confirmForget = false }) { Text("Cancel") } },
         )
     }

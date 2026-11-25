@@ -79,10 +79,11 @@ class MediaViewModel(app: Application) : AndroidViewModel(app) {
                 val bytes = withContext(Dispatchers.IO) {
                     ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.JPEG, 80, it) }.toByteArray()
                 }
-                val text = c.ai.describeImage(bytes, "Is photo mein kya dikh raha hai? Roman Urdu mein tafseel se batao — cheezein, log, text, rang.")
+                val text = c.ai.describeImage(bytes, "What is shown in this photo? Describe it in detail in English — things, people, text, colours.")
                 visionResult.value = text
-            } catch (e: AiException) { visionResult.value = "Vision nahi chala: ${e.userMessage}" }
-            catch (e: Exception) { visionResult.value = "Vision nahi chala — dobara try karo." }
+                runCatching { c.cloud.recordActivity(c.auth.current?.uid, "camera_event", mapOf("source" to "media")) }
+            } catch (e: AiException) { visionResult.value = "Vision did not work: ${e.userMessage}" }
+            catch (e: Exception) { visionResult.value = "Vision did not work — try again." }
             finally { visionBusy.value = false }
         }
     }
@@ -107,7 +108,7 @@ fun MediaScreen(vm: MediaViewModel, onBack: () -> Unit, onNav: (String) -> Unit)
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Camera vision", style = MaterialTheme.typography.titleMedium, color = Gold)
-                        Text("Photo lo — RANI batayegi us mein kya hai (Gemini vision, tumhari key).", color = Mute, style = MaterialTheme.typography.bodySmall)
+                        Text("Take a photo — RANI will tell you what is in it (Gemini vision, your key).", color = Mute, style = MaterialTheme.typography.bodySmall)
                         Button({ camera.launch(null) }, enabled = !visionBusy) { if (visionBusy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("Photo lo aur poocho") }
                         vision?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
                     }
@@ -117,8 +118,8 @@ fun MediaScreen(vm: MediaViewModel, onBack: () -> Unit, onNav: (String) -> Unit)
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Screen share", style = MaterialTheme.typography.titleMedium, color = Gold)
-                        Text("Apni screen RANI ko dikhao — wo dekhegi aur madad karegi. Screen Guardian bhi yahin se chalta hai.", color = Mute, style = MaterialTheme.typography.bodySmall)
-                        Button({ onNav("screen") }) { Text("Screen share kholo") }
+                        Text("Show your screen to RANI — she will look and help. Screen Guardian also starts from here.", color = Mute, style = MaterialTheme.typography.bodySmall)
+                        Button({ onNav("screen") }) { Text("Open screen share") }
                     }
                 }
             }
@@ -137,7 +138,7 @@ fun MediaScreen(vm: MediaViewModel, onBack: () -> Unit, onNav: (String) -> Unit)
             }
             item { Text("Screenshots — aakhri 8", style = MaterialTheme.typography.titleMedium, color = Gold) }
             item {
-                if (shots.isEmpty()) Text("Koi screenshot nahi mila.", color = Mute, style = MaterialTheme.typography.bodySmall)
+                if (shots.isEmpty()) Text("No screenshots found.", color = Mute, style = MaterialTheme.typography.bodySmall)
                 else LazyVerticalGrid(GridCells.Fixed(2), Modifier.height(360.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(shots) { bmp -> Image(bmp.asImageBitmap(), "Screenshot", Modifier.fillMaxWidth().height(170.dp), contentScale = ContentScale.Crop) }
                 }

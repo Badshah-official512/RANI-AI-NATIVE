@@ -67,14 +67,14 @@ class FilesViewModel(app: Application) : AndroidViewModel(app) {
 
     fun delete(f: GenFile) { if (f.file.delete()) { load(); status.value = "${f.file.name} delete kar diya." } }
     fun summarize(f: GenFile) {
-        if (f.kind == "image" || f.kind == "zip") { status.value = "Ye file summarize nahi ho sakti — text/HTML/PDF chuno."; return }
+        if (f.kind == "image" || f.kind == "zip") { status.value = "This file cannot be summarised — choose a text/HTML/PDF file."; return }
         viewModelScope.launch {
             try {
                 val text = withContext(Dispatchers.IO) { f.file.readText().take(12000) }
                 val reply = c.ai.chat(listOf(ChatMessage("user", "Is file ka short summary do (key points):\n$text")))
                 summary.value = reply.text
             } catch (e: AiException) { status.value = e.userMessage }
-            catch (e: Exception) { status.value = "Summarize nahi ho saka." }
+            catch (e: Exception) { status.value = "Could not summarise." }
         }
     }
 }
@@ -93,7 +93,7 @@ fun FilesScreen(vm: FilesViewModel, onBack: () -> Unit) {
         status?.let { Text(it, Modifier.padding(horizontal = 16.dp, vertical = 4.dp), color = Mute, style = MaterialTheme.typography.bodySmall) }
         if (files.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Abhi koi file nahi — RANI se image ya website banwao, yahan aa jayegi.", Modifier.padding(24.dp), color = Mute)
+                Text("No files yet — ask RANI to make an image or a website and it will appear here.", Modifier.padding(24.dp), color = Mute)
             }
             return@Column
         }
@@ -124,8 +124,8 @@ fun FilesScreen(vm: FilesViewModel, onBack: () -> Unit) {
                 if (g.kind == "image") {
                     val bmp = remember(g) { BitmapFactory.decodeFile(g.file.absolutePath) }
                     if (bmp != null) Image(bmp.asImageBitmap(), g.file.name, Modifier.fillMaxWidth().height(320.dp), contentScale = ContentScale.Crop)
-                    else Text("Image khul nahi saki.")
-                } else Text("Open karne ke liye Share dabao, ya Files app mein Downloads/RANI kholo.")
+                    else Text("Image could not be opened.")
+                } else Text("Press Share to open it, or open Downloads/RANI in the Files app.")
             },
             confirmButton = {
                 TextButton({

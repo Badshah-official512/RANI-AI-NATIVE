@@ -41,8 +41,9 @@ class WebSearchViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val reply = c.ai.chat(listOf(ChatMessage("user", query)))
                 answer.value = reply.text
-            } catch (e: AiException) { answer.value = "Jawab nahi mila: ${e.userMessage}" }
-            catch (e: Exception) { answer.value = "Jawab nahi mila — internet ya key check karo." }
+                runCatching { c.cloud.recordActivity(c.auth.current?.uid, "chat", mapOf("source" to "search")) }
+            } catch (e: AiException) { answer.value = "No answer: ${e.userMessage}" }
+            catch (e: Exception) { answer.value = "No answer — check the internet or the key." }
             finally { busy.value = false }
         }
     }
@@ -69,7 +70,7 @@ fun WebSearchScreen(vm: WebSearchViewModel, onBack: () -> Unit, onNav: (String) 
             }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button({ if (query.isNotBlank()) openUrl(engine.urlTemplate.replace("{q}", URLEncoder.encode(query.trim(), "UTF-8"))) }) { Text("${engine.label} par search karo") }
+                    Button({ if (query.isNotBlank()) openUrl(engine.urlTemplate.replace("{q}", URLEncoder.encode(query.trim(), "UTF-8"))) }) { Text("Search on ${engine.label}") }
                     OutlinedButton({ vm.askRani(query) }, enabled = !busy) { Text("RANI se poocho") }
                 }
             }
@@ -84,10 +85,10 @@ fun WebSearchScreen(vm: WebSearchViewModel, onBack: () -> Unit, onNav: (String) 
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Website builder", style = MaterialTheme.typography.titleMedium, color = Gold)
-                        Text("Isi topic par poori website banwani hai? WebForge kholo — prompt pehle se bhara hoga.", color = Mute, style = MaterialTheme.typography.bodySmall)
+                        Text("Want a full website on this topic? Open WebForge — the prompt is already filled in.", color = Mute, style = MaterialTheme.typography.bodySmall)
                         Button({
-                            if (query.isNotBlank()) { WebForgeShared.prompt = "Ek website banao: ${query.trim()}"; onNav("webforge") }
-                        }) { Text("Is par website banao") }
+                            if (query.isNotBlank()) { WebForgeShared.prompt = "Build a website: ${query.trim()}"; onNav("webforge") }
+                        }) { Text("Build a website on this") }
                     }
                 }
             }

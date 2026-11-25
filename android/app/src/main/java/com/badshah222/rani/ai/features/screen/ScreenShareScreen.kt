@@ -43,7 +43,7 @@ class ScreenViewModel(app: Application) : AndroidViewModel(app) {
 
     fun ask(question: String) {
         val bmp = ScreenShareService.frame.value ?: run {
-            answer.value = "Pehle neeche se screen share START karo, Babu Jaan — phir poochho, main dekh kar bataunga."
+            answer.value = "First start screen share below — then ask, and I will look and tell you."
             return
         }
         if (busy.value) return
@@ -54,9 +54,9 @@ class ScreenViewModel(app: Application) : AndroidViewModel(app) {
                 val baos = ByteArrayOutputStream()
                 scaled.compress(Bitmap.CompressFormat.JPEG, 68, baos)
                 val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
-                val full = "User apni phone ki screen share kar raha hai aur ye usi screen ki tasveer hai. " +
-                    "Screen ko ghaur se dekho — kya khula hai, koi error ya masla hai to wo bhi — aur phir is sawal ka jawab do, " +
-                    "asaan alfaaz mein, step-by-step rehnumai ke saath agar zaroorat ho:\n" + question
+                val full = "The user is sharing their phone screen, and this is a picture of that screen. " +
+                    "Look at the screen carefully — what is open, and whether there is any error or problem — then answer this question, " +
+                    "in simple words, with step-by-step guidance if needed:\n" + question
                 val r = c.ai.vision(full, b64)
                 answer.value = r.text
                 lastAskedAt = System.currentTimeMillis()
@@ -64,7 +64,7 @@ class ScreenViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: AiException) {
                 answer.value = e.userMessage
             } catch (e: Exception) {
-                answer.value = "Screen parhne mein masla aya: ${e.message?.take(90)}"
+                answer.value = "Could not read the screen: ${e.message?.take(90)}"
             } finally { busy.value = false }
         }
     }
@@ -74,7 +74,7 @@ class ScreenViewModel(app: Application) : AndroidViewModel(app) {
         if (auto.value && !busy.value && ScreenShareService.running.value &&
             System.currentTimeMillis() - lastAskedAt > 10000
         ) {
-            ask("Is screen par kya ho raha hai? Koi error ya masla hai to samjhao, aur agla step batao.")
+            ask("What is happening on this screen? If there is an error or problem, explain it and tell me the next step.")
         }
     }
 
@@ -118,8 +118,8 @@ fun ScreenShareScreen(vm: ScreenViewModel, onBack: () -> Unit) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(14.dp)) {
                 Text(
-                    "🔒 Privacy: screen sirf tab dikhti hai jab TUM Start dabao aur Android ki permission do. " +
-                        "Jab tak sharing chalti hai, upar notification rehta hai. Stop dabate hi sab band — koi cheez chhup kar record nahi hoti.",
+                    "🔒 Privacy: the screen is only visible when YOU press Start and give Android permission. " +
+                        "While sharing is on, a notification stays at the top. The moment you press Stop, everything stops — nothing is secretly recorded.",
                     Modifier.padding(12.dp), color = Mute, style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -131,7 +131,7 @@ fun ScreenShareScreen(vm: ScreenViewModel, onBack: () -> Unit) {
                 if (f != null) {
                     Image(f.asImageBitmap(), "Shared screen", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
                 } else {
-                    Text(if (sharing) "Screen aa rahi hai…" else "Screen preview yahan ayega", color = Mute)
+                    Text(if (sharing) "Screen is coming through…" else "Screen preview will appear here", color = Mute)
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -144,15 +144,15 @@ fun ScreenShareScreen(vm: ScreenViewModel, onBack: () -> Unit) {
                 }
             }
             if (sharing) {
-                Text("AI se screen ke baare mein poochho:", color = Mute, style = MaterialTheme.typography.bodySmall)
+                Text("Ask the AI about the screen:", color = Mute, style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(false, { vm.ask("Is screen mein kya hai? Sab kuch short mein batao.") }, { Text("Kya hai?") })
-                    FilterChip(false, { vm.ask("Is screen par koi error ya masla hai? Agar hai to wajah aur hal batao.") }, { Text("Error samjhao") })
-                    FilterChip(false, { vm.ask("Mujhe agla step kya karna chahiye? Step-by-step batao.") }, { Text("Agla step?") })
+                    FilterChip(false, { vm.ask("What is on this screen? Tell me everything, briefly.") }, { Text("What is this?") })
+                    FilterChip(false, { vm.ask("Is there an error or problem on this screen? If so, explain the cause and the fix.") }, { Text("Explain the error") })
+                    FilterChip(false, { vm.ask("What should I do next? Tell me step by step.") }, { Text("Next step?") })
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(question, { question = it }, Modifier.weight(1f), singleLine = true,
-                        placeholder = { Text("Apna sawal likho…") }, shape = RoundedCornerShape(14.dp))
+                        placeholder = { Text("Write your question…") }, shape = RoundedCornerShape(14.dp))
                     Button({ if (question.isNotBlank()) { vm.ask(question); question = "" } }, shape = RoundedCornerShape(14.dp)) { Text("Poochho") }
                 }
             }
@@ -161,7 +161,7 @@ fun ScreenShareScreen(vm: ScreenViewModel, onBack: () -> Unit) {
                 Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp)) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(answer!!, style = MaterialTheme.typography.bodyMedium)
-                        TextButton({ vm.stopSpeaking() }) { Text("Bolna band karo") }
+                        TextButton({ vm.stopSpeaking() }) { Text("Stop speaking") }
                     }
                 }
             }

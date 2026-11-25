@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -28,16 +27,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.activity.result.PickVisualMediaRequest
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.badshah222.rani.ai.R
 import com.badshah222.rani.ai.domain.ChatMessage
 import com.badshah222.rani.ai.features.home.ActionDialogs
 import com.badshah222.rani.ai.features.home.HomeViewModel
 import com.badshah222.rani.ai.ui.character.CharState
+import com.badshah222.rani.ai.ui.stonic.RaniAvatar
 import com.badshah222.rani.ai.ui.orb.VoiceOrb
 import com.badshah222.rani.ai.ui.theme.*
 
@@ -52,13 +50,13 @@ fun ChatScreen(vm: HomeViewModel, onBack: () -> Unit, onVoice: () -> Unit) {
     val listState = rememberLazyListState()
     LaunchedEffect(messages.size) { if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex) }
 
-    val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) vm.startListening() else vm.status.value = "Microphone permission denied. Open Permissions to enable it." }
-    fun mic() { if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) vm.startListening() else micPerm.launch(Manifest.permission.RECORD_AUDIO) }
+    val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) vm.requestTalk() else vm.status.value = "Microphone permission denied. Open Permissions to enable it." }
+    fun mic() { if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) vm.requestTalk() else micPerm.launch(Manifest.permission.RECORD_AUDIO) }
 
     Column(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-            Image(painterResource(R.drawable.rani_face), "RANI", Modifier.size(42.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+            RaniAvatar(42.dp, corner = 10.dp)
             Column(Modifier.padding(start = 10.dp).weight(1f)) {
                 Text("RANI", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text("Here to help", style = MaterialTheme.typography.bodySmall, color = Mute)
@@ -226,12 +224,12 @@ fun saveCodeZip(ctx: android.content.Context, files: List<Pair<String, String>>)
                 put(android.provider.MediaStore.Downloads.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
             }
             val uri = ctx.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: return "ZIP nahi ban saka."
+                ?: return "ZIP could not be created."
             ctx.contentResolver.openOutputStream(uri)?.use { out ->
                 java.util.zip.ZipOutputStream(out).use { z ->
                     files.forEach { (n, c) -> z.putNextEntry(java.util.zip.ZipEntry(n)); z.write(c.toByteArray(Charsets.UTF_8)); z.closeEntry() }
                 }
-            } ?: return "ZIP nahi ban saka."
+            } ?: return "ZIP could not be created."
             "ZIP Downloads mein save ho gaya: $name"
         } else {
             val f = java.io.File(ctx.cacheDir, name)

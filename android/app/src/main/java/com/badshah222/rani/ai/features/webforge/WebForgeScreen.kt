@@ -79,19 +79,20 @@ class WebForgeViewModel(app: Application) : AndroidViewModel(app) {
 
     fun generate() {
         val p = prompt.value.trim()
-        if (p.isEmpty()) { status.value = "Pehle batao kaisi website chahiye, Babu Jaan."; return }
+        if (p.isEmpty()) { status.value = "First describe the website you want."; return }
         plan.value = planSite()
-        busy.value = true; status.value = "Website ban rahi hai…"
+        busy.value = true; status.value = "Building the website…"
         viewModelScope.launch {
             try {
                 val reply = c.ai.chat(listOf(ChatMessage("user", "Build this website (${plan.value}): $p")), systemOverride = WEBFORGE_SYSTEM)
                 val files = extractCodeFiles(reply.text)
                 val main = files.firstOrNull { it.first.endsWith(".html", ignoreCase = true) } ?: files.firstOrNull()
-                if (main == null) { status.value = "Website ka code nahi mila — prompt badal kar dobara try karo, Babu Jaan."; return@launch }
+                if (main == null) { status.value = "No website code found — change the prompt and try again."; return@launch }
                 fileName.value = main.first; html.value = main.second
-                status.value = "Website tayyar hai, Babu Jaan — neeche preview dekho."
+                status.value = "Website is ready — see the preview below."
+                runCatching { c.cloud.recordActivity(c.auth.current?.uid, "command", mapOf("tool" to "webforge")) }
             } catch (e: AiException) { status.value = e.userMessage }
-            catch (e: Exception) { status.value = "Website nahi bani — internet ya key check karo." }
+            catch (e: Exception) { status.value = "Website could not be built — check the internet or the key." }
             finally { busy.value = false }
         }
     }
@@ -108,16 +109,16 @@ class WebForgeViewModel(app: Application) : AndroidViewModel(app) {
                             put(MediaStore.Downloads.RELATIVE_PATH, "Download/RANI")
                         }
                         val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                            ?: return@runCatching "Download nahi ho saka."
+                            ?: return@runCatching "Download failed."
                         ctx.contentResolver.openOutputStream(uri)?.use { it.write(h.toByteArray()) }
-                        "Downloads/RANI/${fileName.value} mein save ho gaya, Babu Jaan."
+                        "Saved to Downloads/RANI/${fileName.value}."
                     } else {
                         val dir = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "RANI").apply { mkdirs() }
                         val f = java.io.File(dir, fileName.value)
                         f.writeText(h)
-                        "Downloads/RANI/${fileName.value} mein save ho gaya, Babu Jaan."
+                        "Saved to Downloads/RANI/${fileName.value}."
                     }
-                }.getOrElse { "Download nahi ho saka: ${it.message}" }
+                }.getOrElse { "Download failed: ${it.message}" }
             }
             status.value = msg
         }
@@ -129,10 +130,10 @@ class WebForgeViewModel(app: Application) : AndroidViewModel(app) {
     fun deployToGitHub() {
         val h = html.value ?: return
         val token = c.store.miscSecret("github_token")
-        if (token.isNullOrBlank()) { status.value = "Pehle apna GitHub token save karo (neeche) — wo sirf is phone par encrypted rehta hai."; return }
+        if (token.isNullOrBlank()) { status.value = "First save your GitHub token (below) — it stays encrypted on this phone only."; return }
         val r = repo.value.trim()
-        if (!r.contains("/")) { status.value = "Repo aise likho: owner/repo — jaise Badshah-official512/RANI-AI-ASSISTANT"; return }
-        busy.value = true; status.value = "GitHub par deploy ho raha hai…"
+        if (!r.contains("/")) { status.value = "Write the repo as: owner/repo — for example Badshah-official512/RANI-AI-ASSISTANT"; return }
+        busy.value = true; status.value = "Deploying to GitHub…"
         viewModelScope.launch {
             try {
                 val client = OkHttpClient.Builder().connectTimeout(20, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).build()
@@ -144,8 +145,8 @@ class WebForgeViewModel(app: Application) : AndroidViewModel(app) {
                 val body = JSONObject().put("message", "RANI WebForge: ${fileName.value}").put("content", Base64.encodeToString(h.toByteArray(), Base64.NO_WRAP)).put("branch", "main")
                 if (sha != null) body.put("sha", sha)
                 val put = client.newCall(req(Request.Builder().url(api)).put(body.toString().toRequestBody("application/json".toMediaType())).build()).execute()
-                status.value = if (put.isSuccessful) "Deploy ho gaya, Babu Jaan — https://github.com/$r/blob/main/$path" else "Deploy nahi hua (HTTP ${put.code}) — token ya repo check karo."
-            } catch (e: Exception) { status.value = "Deploy nahi hua: ${e.message?.take(120)}" }
+                status.value = if (put.isSuccessful) "Deployed — https://github.com/$r/blob/main/$path" else "Deploy failed (HTTP ${put.code}) — check the token or repo."
+            } catch (e: Exception) { status.value = "Deploy failed: ${e.message?.take(120)}" }
             finally { busy.value = false }
         }
     }
@@ -162,9 +163,9 @@ fun WebForgeScreen(vm: WebForgeViewModel, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         TopBar("Website Builder — WebForge", onBack)
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Batao kaisi website chahiye — RANI poori website bana degi (MYRA WebForge jaisi).", color = Mute, style = MaterialTheme.typography.bodyMedium)
+            Text("Describe the website you want — RANI will build the whole website for you.", color = Mute, style = MaterialTheme.typography.bodyMedium)
             OutlinedTextField(prompt, { vm.prompt.value = it }, Modifier.fillMaxWidth(), label = { Text("Website ka idea…") }, minLines = 3, shape = RoundedCornerShape(16.dp))
-            Button(vm::generate, Modifier.fillMaxWidth(), enabled = !busy) { if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("Website banao") }
+            Button(vm::generate, Modifier.fillMaxWidth(), enabled = !busy) { if (busy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("Build website") }
             if (plan.isNotBlank()) Text(plan, color = Gold, style = MaterialTheme.typography.bodySmall)
             status?.let { Text(it, color = if (it.contains("nahi") || it.contains("nakaam")) Bad else Ok, style = MaterialTheme.typography.bodySmall) }
             html?.let { h ->
@@ -174,16 +175,16 @@ fun WebForgeScreen(vm: WebForgeViewModel, onBack: () -> Unit) {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button({ vm.download(ctx) }) { Text("Download .html") }
-                    OutlinedButton({ vm.prompt.value = prompt; vm.generate() }) { Text("Dobara banao") }
+                    OutlinedButton({ vm.prompt.value = prompt; vm.generate() }) { Text("Build again") }
                 }
                 Text("GitHub par deploy (optional)", style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(repo, { vm.repo.value = it }, Modifier.fillMaxWidth(), label = { Text("owner/repo") }, singleLine = true)
-                OutlinedTextField(tokenDraft, { tokenDraft = it }, Modifier.fillMaxWidth(), label = { Text(if (ghSaved) "GitHub token saved ✓ (naya lagana hai to likho)" else "GitHub token (repo scope)") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
+                OutlinedTextField(tokenDraft, { tokenDraft = it }, Modifier.fillMaxWidth(), label = { Text(if (ghSaved) "GitHub token saved ✓ (write a new one to replace it)" else "GitHub token (repo scope)") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button({ vm.saveGhToken(tokenDraft); tokenDraft = "" }) { Text("Save token") }
                     Button(vm::deployToGitHub, enabled = !busy) { Text("Deploy to GitHub") }
                 }
-                Text("Token sirf is phone par encrypted rehta hai — kabhi upload nahi hota.", color = Mute, style = MaterialTheme.typography.bodySmall)
+                Text("The token stays encrypted on this phone — it is never uploaded.", color = Mute, style = MaterialTheme.typography.bodySmall)
             }
             Spacer(Modifier.height(16.dp))
         }

@@ -50,14 +50,14 @@ private val FAQ = listOf(
     "Do I need an API key?" to "Yes. RANI AI has no shared key. Create your own free key at Google AI Studio (Gemini) or Groq Console, paste it in Settings > Connections, and press Test & save.",
     "Where is my API key stored?" to "Only on your phone, encrypted with Android Keystore. It is never uploaded to RANI servers and administrators cannot see it.",
     "Why does the mic not work?" to "Allow the Microphone permission (Settings > Permissions) and make sure Google speech services are installed. Some languages need internet for recognition.",
-    "Why are all the voices female?" to "RANI is your AI girlfriend — saari voices female hain, default Aoede (MYRA wali). Male voices nahi hain, aur kabhi nahi hongi.",
+    "Why are all the voices female?" to "RANI is your AI girlfriend — all voices are female, default Aoede. There are no male voices, and there never will be.",
     "Is my chat private?" to "Chats are saved on your phone and, when cloud sync is on, in your own protected account area. Admin analytics only show counts, never message text.",
-    "Will the assistant call or text without asking?" to "No. Calls open the dialer and messages open the composer pre-filled; you always press the final button. \"Message likho aur bhejo\" par RANI pehle exact message dikha kar confirm karti hai, aur sirf Accessibility ON hone par khud type karke Send dabati hai.",
+    "Will the assistant call or text without asking?" to "No. Calls open the dialer and messages open the composer pre-filled; you always press the final button. For \"type and send a message\" RANI first shows you the exact message to confirm, and only types and taps Send herself when Accessibility is ON.",
 )
 private val GUIDES = listOf(
     "Set up Gemini" to "1) Open https://aistudio.google.com/app/apikey and sign in.\n2) Create an API key and copy it.\n3) In RANI AI open Settings > Connections, choose Google Gemini, paste the key, press Test & save.\n4) Pick a model from the list.",
     "Set up Groq" to "1) Open https://console.groq.com/keys and sign in.\n2) Create an API key and copy it.\n3) In Settings > Connections choose Groq, paste the key, press Test & save.\n4) Pick a model.",
-    "Set up voices" to "Settings > Voice & model — Live voice: saari voices female hain (Aoede default). Voice sunne ke liye Voice Call kholo. Chat replies ki awaaz ke liye Settings > Google Voice (optional, female voices).",
+    "Set up voices" to "Settings > Voice & model — Live voice: all voices are female (Aoede default). Open Voice Call to hear the voice. For the chat-reply voice, see Settings > Google Voice (optional, female voices).",
     "Permissions explained" to "Microphone: voice commands. Contacts: RANI reads ALL your contacts on this phone so she can call/message anyone by name — contacts never leave the phone. Notifications: support replies. Type + send only works when Accessibility is ON, and only after you confirm the exact message.",
     "Troubleshooting" to "Invalid key: create a new one and paste again. Rate limit: wait or switch provider. No voice: install voice data. Cloud sync off: sign in again with internet, the support team must have deployed the Firebase claims function. Still stuck? Send us a ticket below.",
     "Privacy" to "Your keys stay on the phone. Your profile, preferences, chat history and tickets are stored in your protected account area and only you can read your chats. See the About page for contact options.",

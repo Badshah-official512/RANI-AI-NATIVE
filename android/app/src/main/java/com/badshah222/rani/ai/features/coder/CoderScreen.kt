@@ -57,7 +57,7 @@ class CoderViewModel(app: Application) : AndroidViewModel(app) {
             val text = runCatching { ctx.contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() } }.getOrNull() ?: ""
             attachedName.value = name ?: "file"
             attachedText.value = text.take(12000)
-            status.value = if (text.isNotEmpty()) "Attached: ${attachedName.value} (${text.length} chars) — ab prompt likho." else "File parh nahi saka."
+            status.value = if (text.isNotEmpty()) "Attached: ${attachedName.value} (${text.length} chars) — now write your prompt." else "Could not read the file."
         }
     }
 
@@ -66,22 +66,23 @@ class CoderViewModel(app: Application) : AndroidViewModel(app) {
         val full = if (attachedText.value.isNotBlank()) "File '${attachedName.value}' ka content:\n```\n${attachedText.value}\n```\n\nTask: $p" else p
         history.value = history.value + ChatMessage("user", p)
         tasks.value = emptyList()
-        busy.value = true; status.value = "Code likh rahi hoon…"
+        busy.value = true; status.value = "Writing code…"
         viewModelScope.launch {
             try {
                 val reply = c.ai.chat(history.value, systemOverride = CODER_SYSTEM)
                 val files = extractCodeFiles(reply.text)
                 history.value = history.value + ChatMessage("assistant", reply.text)
-                if (files.isEmpty()) { status.value = "Is baar koi file nahi bani — dobara batao kya chahiye, Babu Jaan."; return@launch }
+                if (files.isEmpty()) { status.value = "No file was created this time — tell me again what you need."; return@launch }
                 tasks.value = files.map { CodeTask(it.first, it.second, TaskState.PENDING) }
-                status.value = "${files.size} files tayyar — neeche Approve dabao, phir ZIP download karo."
+                status.value = "${files.size} files ready — press Approve below, then download the ZIP."
+                runCatching { c.cloud.recordActivity(c.auth.current?.uid, "command", mapOf("tool" to "coder", "files" to files.size)) }
             } catch (e: AiException) { status.value = e.userMessage }
-            catch (e: Exception) { status.value = "Code nahi bana — internet ya key check karo." }
+            catch (e: Exception) { status.value = "Code could not be created — check the internet or the key." }
             finally { busy.value = false }
         }
     }
 
-    fun approveAll() { tasks.value = tasks.value.map { it.copy(state = TaskState.DONE) }; status.value = "Approved ✔ — ab ZIP download karo." }
+    fun approveAll() { tasks.value = tasks.value.map { it.copy(state = TaskState.DONE) }; status.value = "Approved ✔ — now download the ZIP." }
     fun markWorking(name: String) { tasks.value = tasks.value.map { if (it.name == name) it.copy(state = TaskState.WORKING) else it } }
 }
 
@@ -98,9 +99,9 @@ fun CoderScreen(vm: CoderViewModel, onBack: () -> Unit) {
         }
     }
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        TopBar("Coder — MYRA Coder", onBack)
+        TopBar("Coder", onBack)
         LazyColumn(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
-            item { Text("Batao kya banana hai — RANI mukammal code likhegi, har file alag. @file se apni file attach karo.", color = Mute, style = MaterialTheme.typography.bodyMedium) }
+            item { Text("Describe what to build — RANI will write the complete code, one file at a time. Attach your file with @file.", color = Mute, style = MaterialTheme.typography.bodyMedium) }
             if (attached != null) item { Text("📎 Attached: $attached", color = Gold, style = MaterialTheme.typography.bodySmall) }
             items(history) { m ->
                 Text(m.content.take(600), Modifier.fillMaxWidth(0.95f), color = if (m.role == "user") Color.White else VioletSoft, style = MaterialTheme.typography.bodyMedium)
