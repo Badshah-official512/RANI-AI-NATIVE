@@ -20,7 +20,7 @@ object RaniLanguages {
         Triple("pa", "Punjabi", "ਪੰਜਾਬੀ"),
         Triple("or", "Odia", "ଓଡ଼ିଆ"),
         Triple("as", "Assamese", "অসমীয়া"),
-        Triple("ur", "Urdu", "اردو"),
+        Triple("ur", "Urdu", "Urdu"), // native name kept Latin — UI is English-only, no Urdu script on screen
         Triple("ne", "Nepali", "नेपाली"),
         Triple("sa", "Sanskrit", "संस्कृतम्"),
         Triple("sd", "Sindhi", "سنڌي"),
