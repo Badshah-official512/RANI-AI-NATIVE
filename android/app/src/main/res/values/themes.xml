@@ -1,0 +1,12 @@
+<resources>
+    <style name="Theme.Rani" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/rani_bg</item>
+        <item name="android:statusBarColor">@color/rani_bg</item>
+        <item name="android:navigationBarColor">@color/rani_bg</item>
+    </style>
+    <style name="Theme.Rani.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/rani_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_fg</item>
+        <item name="postSplashScreenTheme">@style/Theme.Rani</item>
+    </style>
+</resources>
