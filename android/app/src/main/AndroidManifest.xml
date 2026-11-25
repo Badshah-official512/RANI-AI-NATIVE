@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- v6.3 MINIMAL permission set (owner order 2026-11-18): sirf wohi jo asal kaam ke liye chahiye —
+         apps kholna (bridge, koi permission nahi), screen band honay par kaam (foreground services),
+         voice + wake word (mic), dusri apps ke upar orb (alert window). Baqi SAB hata diya:
+         contacts, calendar, camera, location, bluetooth, media, phone/call-log, health — sab khatam. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.CAMERA" /> <!-- v7.2: sirf Camera Share ke liye (user decision 2026-11-21) — camera sirf call mein button dabane par chalta hai -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" /> <!-- sirf call ke doran background keep-alive; wake word nahi hai --> <!-- call ke liye audio focus/mode (mic takeover) -->          <!-- voice + wake word -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />   <!-- background kaam -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" /> <!-- background agent -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" /> <!-- screen share (Android 14+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />   <!-- announcements / replies -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />            <!-- screen-off par kaam -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />  <!-- dusri apps ke upar floating orb (user Settings se grant karta hai) -->
+
+    <!-- v7.5.1 PLAY-PROTECT SAFE set (owner order 2026-11-22): users ke phones par Play Protect install block kar raha tha.
+         Google ki restricted "SMS / Call Log" group wali permissions (READ_CALL_LOG), READ_PHONE_STATE aur
+         PACKAGE_USAGE_STATS HATA di gayein — in ka koi asal feature istemal hi nahi karta tha (call-log feature asal mein
+         AI call ki apni transcript hai, phone ki history nahi). Baqi wohi permissions jo asal features ke liye chahiye:
+         apps kholna (bridge), calls (CALL_PHONE), typing (Accessibility), camera, contacts (naam se call), location, media, calendar. -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" /> <!-- System Monitor: top processes kill -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" /> <!-- Automation routines: screen brightness -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" /> <!-- Screen Guardian -->
+
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <queries>
+        <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent>
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
+        <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
+        <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="https" /></intent>
+        <intent><action android:name="android.intent.action.DIAL" /></intent>
+        <intent><action android:name="android.intent.action.SENDTO" /><data android:scheme="smsto" /></intent>
+        <intent><action android:name="android.media.action.IMAGE_CAPTURE" /></intent>
+        <package android:name="com.whatsapp" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.android.chrome" />
+    </queries>
+
+    <application
+        android:name=".RaniApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
+        android:theme="@style/Theme.Rani">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.Rani.Splash">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service android:name=".data.RaniMessagingService" android:exported="false">
+            <intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter>
+        </service>
+
+
+        <service android:name=".core.CallService" android:exported="false" android:foregroundServiceType="microphone" />
+        <service
+            android:name=".core.ScreenShareService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <service
+            android:name=".core.FloatingOrbService"
+            android:exported="false" />
+
+        <!-- v7.2 Accessibility Control: user khud Settings se ON kare — type/tap/scroll/screen-read sirf us ki command par -->
+        <service
+            android:name=".core.RaniAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/a11y_config" />
+        </service>
+
+        <service
+            android:name=".core.AgentService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- MYRA Screen Guardian: watches ONLY the screen the user shares via Screen Share. -->
+        <service
+            android:name=".features.guardian.ScreenGuardianService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Watches the user-shared screen for sensitive content (password / bank / OTP) and warns by voice." />
+        </service>
+
+        <!-- Share RANI's generated files (Files screen) -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
+
+        <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="rani_updates" />
+    </application>
+</manifest>
