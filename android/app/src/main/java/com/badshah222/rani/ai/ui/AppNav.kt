@@ -1,29 +1,20 @@
 package com.badshah222.rani.ai.ui
 
 import android.app.Activity
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.badshah222.rani.ai.features.about.AboutScreen
+import com.badshah222.rani.ai.features.camera.CameraViewScreen
+import com.badshah222.rani.ai.features.camera.CameraViewModel
 import com.badshah222.rani.ai.features.contacts.ContactsScreen
 import com.badshah222.rani.ai.features.contacts.ContactsViewModel
 import com.badshah222.rani.ai.features.automation.AutomationScreen
@@ -39,12 +30,17 @@ import com.badshah222.rani.ai.features.memory.MemoryScreen
 import com.badshah222.rani.ai.features.memory.MemoryViewModel
 import com.badshah222.rani.ai.features.monitor.SystemMonitorScreen
 import com.badshah222.rani.ai.features.monitor.SystemMonitorViewModel
+import com.badshah222.rani.ai.features.recordings.RecordingsScreen
 import com.badshah222.rani.ai.features.search.WebSearchScreen
 import com.badshah222.rani.ai.features.search.WebSearchViewModel
 import com.badshah222.rani.ai.features.tools.AiToolsScreen
 import com.badshah222.rani.ai.features.tools.AiToolsViewModel
+import com.badshah222.rani.ai.features.visualhub.VisualHubScreen
+import com.badshah222.rani.ai.features.visualhub.VisualHubViewModel
 import com.badshah222.rani.ai.features.webforge.WebForgeScreen
 import com.badshah222.rani.ai.features.webforge.WebForgeViewModel
+import com.badshah222.rani.ai.features.world.YourWorldScreen
+import com.badshah222.rani.ai.features.world.YourWorldViewModel
 import com.badshah222.rani.ai.features.browser.BrowserScreen
 import com.badshah222.rani.ai.features.browser.BrowserViewModel
 import com.badshah222.rani.ai.features.screen.ScreenShareScreen
@@ -65,8 +61,6 @@ import com.badshah222.rani.ai.features.home.VoiceScreen
 import com.badshah222.rani.ai.features.permissions.PermissionsScreen
 import com.badshah222.rani.ai.features.settings.SettingsScreen
 import com.badshah222.rani.ai.features.settings.SettingsViewModel
-import com.badshah222.rani.ai.ui.character.CharState
-import com.badshah222.rani.ai.ui.orb.VoiceOrb
 import com.badshah222.rani.ai.ui.theme.*
 
 @Composable
@@ -86,8 +80,11 @@ fun AppNav(activity: Activity) {
     }
 }
 
-private val TABS = setOf("home", "chat", "history", "settings")
-
+/**
+ * Stonic navigation: ONE scrolling home page, everything else reached from
+ * it. There is no bottom bar and no tab bar anywhere — Stonic's window has
+ * none, and the old MYRA-style tab bar is removed.
+ */
 @Composable
 private fun SignedInNav(session: SessionViewModel) {
     val nav = rememberNavController()
@@ -96,9 +93,8 @@ private fun SignedInNav(session: SessionViewModel) {
     val tools: AiToolsViewModel = viewModel(); val webforge: WebForgeViewModel = viewModel(); val coder: CoderViewModel = viewModel()
     val files: FilesViewModel = viewModel(); val media: MediaViewModel = viewModel(); val search: WebSearchViewModel = viewModel()
     val monitor: SystemMonitorViewModel = viewModel(); val automation: AutomationViewModel = viewModel(); val memory: MemoryViewModel = viewModel()
-    val backStack by nav.currentBackStackEntryAsState()
-    val route = backStack?.destination?.route ?: "home"
-    fun tab(r: String) { nav.navigate(r) { popUpTo("home") { saveState = true }; launchSingleTop = true; restoreState = true } }
+    val world: YourWorldViewModel = viewModel(); val visualhub: VisualHubViewModel = viewModel()
+    val camera: CameraViewModel = viewModel()
 
     // "Browser kholo…" asked in chat/voice: open the assistant's own browser.
     val pendingBrowser by home.pendingBrowser.collectAsState()
@@ -112,13 +108,10 @@ private fun SignedInNav(session: SessionViewModel) {
     val pendingContacts by home.pendingContacts.collectAsState()
     LaunchedEffect(pendingContacts) { if (pendingContacts) { nav.navigate("contacts"); home.pendingContacts.value = false } }
 
-    Scaffold(
-        bottomBar = { if (route in TABS) LiaBottomBar(route, { tab(it) }, { nav.navigate("voice") }) },
-        containerColor = Ink,
-    ) { pad ->
+    Scaffold(containerColor = Ink) { pad ->
         Box(Modifier.padding(pad)) {
             NavHost(nav, startDestination = "home") {
-                composable("home") { HomeScreen(session, home) { nav.navigate(it) } }
+                composable("home") { HomeScreen(session, home, world, memory, visualhub) { nav.navigate(it) } }
                 composable("chat") { ChatScreen(home, { nav.popBackStack() }, { nav.navigate("voice") }) }
                 composable("voice") { VoiceScreen(home) { nav.popBackStack() } }
                 composable("quick") { QuickActionsScreen(home, { nav.popBackStack() }, { nav.navigate(it) }) }
@@ -141,39 +134,16 @@ private fun SignedInNav(session: SessionViewModel) {
                 composable("memory") { MemoryScreen(memory) { nav.popBackStack() } }
                 composable("voicemode") { VoiceModeScreen(home, settings) { nav.popBackStack() } }
                 composable("permissions") { PermissionsScreen { nav.popBackStack() } }
+                composable("camera") { CameraViewScreen(camera) { nav.popBackStack() } }
+                composable("visualhub") { VisualHubScreen(visualhub, { nav.popBackStack() }) { nav.navigate(it) } }
+                composable("world") {
+                    YourWorldScreen(world, { nav.popBackStack() }) { topic ->
+                        home.send("Tell me about: $topic")
+                        nav.navigate("chat")
+                    }
+                }
+                composable("recordings") { RecordingsScreen { nav.popBackStack() } }
             }
         }
-    }
-}
-
-/** Floating pill bottom bar with the voice orb in the centre, modelled on the reference app. */
-@Composable
-private fun LiaBottomBar(current: String, onTab: (String) -> Unit, onVoice: () -> Unit) {
-    Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
-        Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(Panel2).padding(horizontal = 8.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TabItem(Modifier.weight(1f), Icons.Default.Home, "Home", current == "home") { onTab("home") }
-            TabItem(Modifier.weight(1f), Icons.Default.Chat, "Chat", current == "chat") { onTab("chat") }
-            Spacer(Modifier.width(62.dp))
-            TabItem(Modifier.weight(1f), Icons.Default.History, "History", current == "history") { onTab("history") }
-            TabItem(Modifier.weight(1f), Icons.Default.Settings, "Settings", current == "settings") { onTab("settings") }
-        }
-        VoiceOrb(
-            CharState.Idle, 0f, false,
-            Modifier.align(Alignment.TopCenter).offset(y = (-16).dp).size(58.dp).clip(CircleShape).background(Ink).clickable { onVoice() },
-        )
-    }
-}
-
-@Composable
-private fun TabItem(modifier: Modifier, icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
-    Column(
-        modifier.clip(RoundedCornerShape(16.dp)).clickable { onClick() }.padding(vertical = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Icon(icon, label, tint = if (selected) VioletSoft else Mute, modifier = Modifier.size(22.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, color = if (selected) VioletSoft else Mute, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
     }
 }

@@ -38,14 +38,21 @@ import kotlin.math.sin
 enum class CharState { Idle, Listening, Thinking, Speaking, Working, Error }
 
 /**
- * The owner's portrait as an interactive 3D-style character.
+ * The RANI character — the faceless glowing holographic girl-form (approved
+ * Stonic video frame, RANI's own clean version). She is ALWAYS shown
+ * full-figure, figure-shaped, never circular: a round crop hides the figure
+ * and leaves only a blue ball. Small avatar spots use the head/shoulders
+ * crop in a rounded rectangle (see ui.stonic.RaniAvatar).
  *  - Parallax tilt: finger drag or phone motion (accelerometer) rotates the portrait in 3D.
- *  - Idle: slow breathing + soft golden glow.   Listening: rings that follow the microphone level.
+ *  - Idle: slow breathing + soft glow.   Listening: rings that follow the microphone level.
  *  - Thinking: rotating light arc.   Speaking: radial sound-wave bars.   Working: orbiting lights.   Error: red flash + shake.
  *  Low-power mode drops motion sensing, glow and per-frame bars so old phones stay smooth.
+ *
+ * @param fullFigure when true (home hero, live call) the figure fills the
+ *  whole box height; otherwise she is drawn smaller inside the state rings.
  */
 @Composable
-fun RaniCharacter(state: CharState, micLevel: Float, lowPower: Boolean, modifier: Modifier = Modifier) {
+fun RaniCharacter(state: CharState, micLevel: Float, lowPower: Boolean, modifier: Modifier = Modifier, fullFigure: Boolean = false) {
     val inf = rememberInfiniteTransition(label = "char")
     val duration = if (lowPower) 3200 else 2400
     val breathe by inf.animateFloat(1f, 1.03f, infiniteRepeatable(tween(duration, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "breathe")
@@ -101,9 +108,9 @@ fun RaniCharacter(state: CharState, micLevel: Float, lowPower: Boolean, modifier
             }
         }
         Image(
-            painterResource(R.drawable.rani_face), contentDescription = "RANI AI assistant",
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(0.68f).padding(2.dp).clip(CircleShape)
+            painterResource(R.drawable.rani_character), contentDescription = "RANI AI — your AI girlfriend",
+            contentScale = ContentScale.Fit,
+            modifier = (if (fullFigure) Modifier.fillMaxHeight() else Modifier.fillMaxSize(0.68f)).padding(2.dp)
                 .graphicsLayer {
                     rotationX = tiltX; rotationY = tiltY; cameraDistance = 14f * density
                     scaleX = scale; scaleY = scale; translationX = sin(phase * 14) * 10f * shake

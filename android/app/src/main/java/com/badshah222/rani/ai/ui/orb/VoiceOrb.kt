@@ -24,9 +24,11 @@ import com.badshah222.rani.ai.ui.theme.OrbOrange
 import com.badshah222.rani.ai.ui.theme.Violet
 
 /**
- * The RANI voice orb: a black-hole core with a glowing accretion ring,
- * drawn entirely on Canvas. It breathes when idle, pulses with the live mic
- * level while listening, and changes colour with the assistant's state.
+ * The RANI voice orb: a glowing blue energy ball (Stonic-style), drawn
+ * entirely on Canvas — bright white-cyan core, deep-blue rim, rotating
+ * energy ring and sparkle particles. No face, no body. It breathes when
+ * idle, pulses with the live mic level while listening, and changes colour
+ * with the assistant's state.
  */
 @Composable
 fun VoiceOrb(state: CharState, level: Float, lowPower: Boolean, modifier: Modifier = Modifier) {
@@ -58,11 +60,11 @@ fun VoiceOrb(state: CharState, level: Float, lowPower: Boolean, modifier: Modifi
             brush = Brush.radialGradient(listOf(ringColor.copy(alpha = 0.32f), Color.Transparent), center = Offset(cx, cy), radius = r),
             radius = r, center = Offset(cx, cy),
         )
-        // Accretion ring (tilted ellipse, rotating)
+        // Energy ring (tilted ellipse, rotating)
         rotate(spin, pivot = Offset(cx, cy)) {
             drawOval(
                 brush = Brush.sweepGradient(
-                    listOf(Color.Transparent, ringColor.copy(alpha = 0.9f), Color(0xFFFFC46B), ringColor.copy(alpha = 0.25f), Color.Transparent),
+                    listOf(Color.Transparent, ringColor.copy(alpha = 0.9f), Color(0xFF7DD3FC), ringColor.copy(alpha = 0.25f), Color.Transparent),
                     center = Offset(cx, cy),
                 ),
                 topLeft = Offset(cx - r * 0.98f, cy - r * 0.36f),
@@ -73,18 +75,33 @@ fun VoiceOrb(state: CharState, level: Float, lowPower: Boolean, modifier: Modifi
         // Faint orbit ring
         rotate(-spin * 0.6f, pivot = Offset(cx, cy)) {
             drawOval(
-                color = Violet.copy(alpha = 0.30f),
+                color = CyanAcc.copy(alpha = 0.30f),
                 topLeft = Offset(cx - r * 0.9f, cy - r * 0.55f),
                 size = Size(r * 1.8f, r * 1.1f),
                 style = Stroke(width = r * 0.03f),
             )
         }
-        // Black core with a soft top light and a coloured rim
-        drawCircle(color = Color.Black, radius = r * 0.52f, center = Offset(cx, cy))
+        // Glowing blue energy core: bright white-cyan heart, deep-blue rim
         drawCircle(
-            brush = Brush.radialGradient(listOf(Color.White.copy(alpha = 0.13f), Color.Transparent), center = Offset(cx - r * 0.18f, cy - r * 0.2f), radius = r * 0.5f),
+            brush = Brush.radialGradient(
+                listOf(Color.White, Color(0xFFBAE6FD), Color(0xFF38BDF8), Color(0xFF1D4ED8)),
+                center = Offset(cx, cy), radius = r * 0.52f
+            ),
+            radius = r * 0.52f, center = Offset(cx, cy),
+        )
+        drawCircle(
+            brush = Brush.radialGradient(listOf(Color.White.copy(alpha = 0.35f), Color.Transparent), center = Offset(cx - r * 0.18f, cy - r * 0.2f), radius = r * 0.5f),
             radius = r * 0.5f, center = Offset(cx, cy),
         )
         drawCircle(color = ringColor.copy(alpha = 0.85f), radius = r * 0.52f, center = Offset(cx, cy), style = Stroke(width = r * 0.035f))
+        // Sparkle particles around the core
+        for (i in 0 until 8) {
+            val a = Math.toRadians((spin * 1.7 + i * 45).toDouble()).toFloat()
+            val pr = r * (0.62f + 0.12f * kotlin.math.sin(spin * 0.05f + i * 1.3f))
+            drawCircle(
+                Color.White.copy(alpha = 0.75f), r * 0.02f,
+                Offset(cx + kotlin.math.cos(a) * pr, cy + kotlin.math.sin(a) * pr),
+            )
+        }
     }
 }

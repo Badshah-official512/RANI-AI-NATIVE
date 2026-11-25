@@ -36,7 +36,7 @@ fun VoiceModeScreen(home: HomeViewModel, settings: SettingsViewModel, onBack: ()
                 Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
                     VoiceOrb(state, level, lowPower, Modifier.size(180.dp))
                 }
-                Text("Persona: Girlfriend 🌸 — RANI hamesha tumhari girlfriend hai.", Modifier.fillMaxWidth(), color = VioletSoft, style = MaterialTheme.typography.bodyMedium)
+                Text("Persona: Girlfriend — RANI is always your girlfriend.", Modifier.fillMaxWidth(), color = VioletSoft, style = MaterialTheme.typography.bodyMedium)
             }
             item {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
@@ -81,7 +81,7 @@ fun VoiceModeScreen(home: HomeViewModel, settings: SettingsViewModel, onBack: ()
                         Text("Session (live)", style = MaterialTheme.typography.titleMedium, color = Gold)
                         Row(verticalAlignment = Alignment.CenterVertically) { Text("Use Live voice on Voice Call", Modifier.weight(1f)); Switch(liveEnabled, settings::setLiveEnabled) }
                         Text("Live model: ${liveModel ?: "abhi confirm nahi"}", style = MaterialTheme.typography.bodySmall, color = if (liveModel != null) Ok else Mute)
-                        Text("Session resumption ON hai — call kat jaye to RANI wahi se baat dobara shuru karti hai.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                        Text("Session resumption is ON — if a call drops, RANI resumes from the same point.", style = MaterialTheme.typography.bodySmall, color = Mute)
                         if (liveCandidates.isNotEmpty()) Text("Tried models: ${liveCandidates.joinToString(", ")}", style = MaterialTheme.typography.bodySmall, color = Mute)
                         Button(settings::testLive, enabled = !liveTesting) { if (liveTesting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("Test Live voice") }
                         liveMsg?.let { Text(it.second, color = if (it.first) Ok else Bad, style = MaterialTheme.typography.bodySmall) }

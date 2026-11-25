@@ -12,7 +12,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -33,18 +32,16 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import com.badshah222.rani.ai.R
 import com.badshah222.rani.ai.data.voice.LiveSession
 import com.badshah222.rani.ai.ui.character.CharState
+import com.badshah222.rani.ai.ui.character.RaniCharacter
 import com.badshah222.rani.ai.ui.orb.VoiceOrb
 import com.badshah222.rani.ai.ui.theme.*
 import kotlinx.coroutines.delay
@@ -52,9 +49,11 @@ import kotlin.random.Random
 
 /**
  * The full-screen voice call. Primary engine: Gemini Live — a real-time conversation
- * in a natural human voice, with the assistant's logo/avatar inside the orb.
- * If Live is unavailable for this phone/key, it quietly falls back to the classic
- * listen → think → speak mode and says so once, instead of looping errors.
+ * in a natural human voice, with the full-figure character on screen and a small
+ * voice-pulse orb as the level indicator. If Live is unavailable for this
+ * phone/key, it quietly falls back to the classic listen → think → speak mode
+ * and says so once, instead of looping errors. The voice-print gate runs once
+ * at the start (requestLive / requestCall) — never on every turn.
  */
 @Composable
 fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
@@ -73,7 +72,7 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
 
     fun begin() {
         if (started) return; started = true
-        if (liveMode) vm.startLiveSession() else { vm.beginCall(); vm.startListening() }
+        if (liveMode) vm.requestLive() else vm.requestCall()
     }
     val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) begin() else vm.status.value = "Microphone permission denied. Open Permissions to enable it."
@@ -131,11 +130,6 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
             else -> ""
         }
     } else partial
-    val avatarRes = when {
-        vm.girlMode -> R.drawable.rani_face
-        vm.avatarChoice == "logo" -> R.drawable.ic_launcher_fg
-        else -> R.drawable.rani_face
-    }
 
     val stars = remember { List(70) { Offset(Random.nextFloat(), Random.nextFloat()) to Random.nextFloat() } }
     val driftT = rememberInfiniteTransition(label = "drift")
@@ -146,7 +140,7 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     var burst by remember { mutableStateOf(0) }
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Ink, Panel2, Ink))).statusBarsPadding().navigationBarsPadding()) {
         AmbientLights(Modifier.fillMaxSize())
-        // MYRA-style edge glow: the whole screen rim lights up while the assistant is listening.
+        // Edge glow: the whole screen rim lights up while the assistant is listening.
         val glowOn = if (liveMode) liveState == com.badshah222.rani.ai.data.voice.LiveSession.State.Listening else classicState == CharState.Listening
         if (glowOn) {
             Box(Modifier.fillMaxSize().border(3.dp, Violet.copy(alpha = 0.45f + 0.3f * kotlin.math.abs(kotlin.math.sin(spin * Math.PI / 180.0)).toFloat()), RoundedCornerShape(28.dp)))
@@ -185,11 +179,20 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
                     }
                 }
                 TapLightBurst(burst, rgb, Modifier.size(300.dp))
-                VoiceOrb(orbState, orbLevel, vm.lowPower, Modifier.size(280.dp).offset(y = floatY.dp).clip(CircleShape).clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { burst++ })
-                // The assistant's own logo/avatar lives inside the orb.
-                Image(painterResource(avatarRes), name, Modifier.size(118.dp).offset(y = floatY.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                // The character, full figure (never circular) — the orb is only the
+                // small voice-pulse indicator below the status text.
+                RaniCharacter(
+                    orbState, orbLevel, vm.lowPower,
+                    Modifier.fillMaxWidth().height(380.dp).offset(y = floatY.dp)
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { burst++ },
+                    fullFigure = true,
+                )
             }
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(6.dp))
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                VoiceOrb(orbState, orbLevel, vm.lowPower, Modifier.size(56.dp).clip(CircleShape))
+            }
+            Spacer(Modifier.height(10.dp))
             Text(statusText, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontStyle = FontStyle.Italic, style = MaterialTheme.typography.titleMedium)
             Text(
                 if (liveMode) "Real voice · Gemini Live" else "Classic voice mode",
@@ -207,7 +210,7 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
             }
             if (!liveMode && fallback != null) {
                 Text(
-                    "Live voice kyun nahi chali: $fallback",
+                    "Why Live voice did not start: $fallback",
                     Modifier.fillMaxWidth().padding(top = 10.dp).background(Bad.copy(alpha = 0.15f), RoundedCornerShape(10.dp)).padding(10.dp),
                     textAlign = TextAlign.Center, color = Bad, style = MaterialTheme.typography.bodySmall,
                 )

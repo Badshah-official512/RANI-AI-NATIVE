@@ -1,8 +1,12 @@
 package com.badshah222.rani.ai.features.settings
 
+import android.Manifest
 import android.app.Application
 import android.content.Intent
-import androidx.compose.foundation.Image
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,46 +33,46 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.badshah222.rani.ai.RaniApp
-import com.badshah222.rani.ai.R
+import com.badshah222.rani.ai.core.AwarenessMonitor
 import com.badshah222.rani.ai.data.ai.*
 import com.badshah222.rani.ai.data.voice.*
 import com.badshah222.rani.ai.domain.*
 import com.badshah222.rani.ai.features.auth.SessionViewModel
+import com.badshah222.rani.ai.ui.stonic.RaniAvatar
 import com.badshah222.rani.ai.ui.theme.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Settings — ported from MYRA Ultra's SettingsPage (myra_pages.py).
- * Cards in MYRA order: Profile, Language, Gemini API, Voice & model,
- * Session (live), Window, Orb / startup / Screen Guardian, About.
- * RANI is always the girlfriend — no mode switch, no male voices.
+ * Settings — Stonic-style sections: Profile, Language, Gemini API, Voice &
+ * model, Session (live), Orb / Screen Guardian, Stonic & Safety, Memory,
+ * Image Studio, Emotions, Look & feel, Google Voice. RANI is always the
+ * girlfriend — no mode switch, no male voices.
  */
 class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val c = (app as RaniApp).container
     private val uid get() = c.auth.current?.uid
 
-    // ---- Profile (MYRA: Profile name) ----
+    // ---- Profile ----
     val assistantName = MutableStateFlow(c.store.assistantName)
     val petName = MutableStateFlow(c.store.petName)
     fun setAssistantName(n: String) { c.store.assistantName = n.trim().ifBlank { "RANI" }; assistantName.value = c.store.assistantName }
     fun setPetName(n: String) { c.store.petName = n.trim().ifBlank { "Babu Jaan" }; petName.value = c.store.petName }
 
-    // ---- Language (MYRA: 148 languages + search) ----
+    // ---- Language (148 languages + search) ----
     val language = MutableStateFlow(c.store.language)
     fun setLanguage(tag: String) { c.store.language = tag; language.value = tag; pushPrefs() }
 
-    // ---- Gemini API (MYRA: Gemini API key; BYOK — user enters their own free key) ----
+    // ---- Gemini API (BYOK — user enters their own free key) ----
     val provider = MutableStateFlow(if (c.store.provider == Provider.GEMINI) Provider.GEMINI else c.store.provider)
     val models = MutableStateFlow<List<String>>(emptyList())
     val selectedModel = MutableStateFlow(c.store.model(c.store.provider))
@@ -78,7 +82,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun selectProvider(p: Provider) { c.store.provider = p; provider.value = p; models.value = emptyList(); selectedModel.value = c.store.model(p); keySaved.value = c.store.apiKey(p) != null; aiMsg.value = null; pushPrefs() }
     fun testAndSave(key: String) {
         val p = provider.value
-        if (key.isBlank() && !keySaved.value) { aiMsg.value = false to "Pehle apni ${p.label} API key paste karo, Babu Jaan."; return }
+        if (key.isBlank() && !keySaved.value) { aiMsg.value = false to "First paste your ${p.label} API key."; return }
         viewModelScope.launch {
             testing.value = true; aiMsg.value = null
             try {
@@ -91,7 +95,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
                     val lm = runCatching { c.ai.detectLiveModel() }.getOrNull()
                     liveModel.value = lm; liveModelKey.value = c.store.liveModelKey; liveCandidates.value = c.store.liveCandidates; geminiSaved.value = true
                     if (lm != null) aiMsg.value = true to "Key is valid. Live voice available — ${LiveModels.fromKey(c.store.liveModelKey)?.label ?: "Gemini Live"}."
-                    else aiMsg.value = true to "Key valid hai — chat chalega. Lekin is key par Live voice nahi mila, is liye Live call classic mode mein chalegi."
+                    else aiMsg.value = true to "Key is valid — chat will work. But no Live voice was found on this key, so Live calls will run in classic mode."
                 }
                 uid?.let { runCatching { c.cloud.saveProviderStatus(it, p.id, true, "ok") } }; pushPrefs()
             } catch (e: AiException) { aiMsg.value = false to e.userMessage; uid?.let { runCatching { c.cloud.saveProviderStatus(it, p.id, c.store.apiKey(p) != null, "failed") } } }
@@ -101,7 +105,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun selectModel(m: String) { c.store.setModel(provider.value, m); selectedModel.value = m; pushPrefs() }
     fun removeKey() { val p = provider.value; c.store.setApiKey(p, null); keySaved.value = false; models.value = emptyList(); aiMsg.value = true to "Key removed from this phone."; uid?.let { u -> viewModelScope.launch { runCatching { c.cloud.saveProviderStatus(u, p.id, false, "removed") } } } }
 
-    // ---- Voice & model (MYRA VoicePage: female voices only, live model RadioList) ----
+    // ---- Voice & model (female voices only, live model list) ----
     val liveVoiceName = MutableStateFlow(c.store.liveVoiceName)
     val liveModel = MutableStateFlow(c.store.liveModel)
     val liveModelKey = MutableStateFlow(c.store.liveModelKey)
@@ -115,19 +119,19 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setLiveModelKey(k: String) { c.store.liveModelKey = k; liveModelKey.value = k }
     fun setLiveEnabled(on: Boolean) { c.store.liveEnabled = on; liveEnabled.value = on }
     fun testLive() {
-        if (c.store.apiKey(Provider.GEMINI) == null) { liveMsg.value = false to "Pehle Connections mein apni Gemini API key save karo."; return }
+        if (c.store.apiKey(Provider.GEMINI) == null) { liveMsg.value = false to "First save your Gemini API key in Connections."; return }
         viewModelScope.launch {
             liveTesting.value = true; liveMsg.value = null
             try {
                 val m = c.ai.detectLiveModel()
                 liveModel.value = m; liveModelKey.value = c.store.liveModelKey; liveCandidates.value = c.store.liveCandidates; lastLiveError.value = c.store.lastLiveError
-                liveMsg.value = if (m != null) true to "Live ready — ${LiveModels.fromKey(c.store.liveModelKey)?.label ?: "Gemini Live"} available hai." else false to "Is key par Live voice nahi hai. Voice Call classic mode mein chalegi."
-            } catch (e: Exception) { liveMsg.value = false to "Live test failed. Internet check karke dobara try karo." }
+                liveMsg.value = if (m != null) true to "Live ready — ${LiveModels.fromKey(c.store.liveModelKey)?.label ?: "Gemini Live"} is available." else false to "No Live voice on this key. Voice Call will run in classic mode."
+            } catch (e: Exception) { liveMsg.value = false to "Live test failed. Check the internet and try again." }
             finally { liveTesting.value = false }
         }
     }
 
-    // ---- Voice basics (MYRA VoicePage: listen modes, mic sensitivity + gain) ----
+    // ---- Voice basics (listen modes, mic sensitivity + gain) ----
     val listenMode = MutableStateFlow(c.store.listenMode)
     val micSensitivity = MutableStateFlow(c.store.micSensitivity)
     val micGain = MutableStateFlow(c.store.micGain)
@@ -141,7 +145,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setLowPower(v: Boolean) { c.store.lowPower = v; lowPower.value = v }
     fun pickGoogleVoice(v: String) { c.store.googleTtsVoice = v; googleVoice.value = v }
 
-    // ---- Orb & Guardian (MYRA SettingsPage: orb float size 56–200 default 96,
+    // ---- Orb & Guardian (orb float size 56–200 default 96,
     //      UI scale 60–140 default 100, guardian interval 30/45/90 default 45) ----
     val orbFloatSize = MutableStateFlow(c.store.orbFloatSize)
     val orbUiScale = MutableStateFlow(c.store.orbUiScale)
@@ -157,7 +161,57 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun setGuardianInterval(v: Int) { c.store.guardianInterval = v; guardianInterval.value = v }
 
-    // ---- Memory (MYRA: ConversationMemory — on-device only) ----
+    // ---- Stonic & Safety (RANI extras beyond Stonic: voice-print gate, Face Lock, screen recording) ----
+    val awarenessOn = MutableStateFlow(c.store.awarenessEnabled)
+    val faceLockOn = MutableStateFlow(c.store.faceLockEnabled)
+    val voicePrintGate = MutableStateFlow(c.store.voicePrintGate)
+    val voicePrintEnrolled = MutableStateFlow(c.voicePrint.enrolled)
+    val facePrintEnrolled = MutableStateFlow(c.facePrint.enrolled)
+    val screenRecordingOn = MutableStateFlow(c.store.screenRecordingEnabled)
+    val safetyMsg = MutableStateFlow<Pair<Boolean, String>?>(null)
+    val voiceEnrolling = MutableStateFlow(false)
+    val voiceVerifying = MutableStateFlow(false)
+    fun setAwareness(v: Boolean) { c.store.awarenessEnabled = v; AwarenessMonitor.enabled = v; awarenessOn.value = v }
+    fun setFaceLock(v: Boolean) {
+        c.facePrint.setLock(v); faceLockOn.value = v
+        viewModelScope.launch { runCatching { c.cloud.recordActivity(uid, "face_lock", mapOf("enabled" to v)) } }
+    }
+    fun setVoicePrintGate(v: Boolean) { c.voicePrint.setGate(v); voicePrintGate.value = v }
+    fun setScreenRecording(v: Boolean) { c.store.screenRecordingEnabled = v; screenRecordingOn.value = v }
+    fun enrolVoicePrint() {
+        viewModelScope.launch {
+            voiceEnrolling.value = true; safetyMsg.value = null
+            val ok = c.voicePrint.enroll()
+            voiceEnrolling.value = false; voicePrintEnrolled.value = c.voicePrint.enrolled
+            if (ok) {
+                safetyMsg.value = true to "Voice enrolled. With the gate ON, RANI will only talk to you."
+                runCatching { c.cloud.recordActivity(uid, "voiceprint_enrol", mapOf("samples" to 3)) }
+                runCatching { c.cloud.recordVoiceprintEnrolled(uid) }
+            } else safetyMsg.value = false to "Could not hear your voice clearly. Try again in a quiet place."
+        }
+    }
+    fun verifyVoicePrint() {
+        viewModelScope.launch {
+            voiceVerifying.value = true
+            val (ok, _) = c.voicePrint.verify()
+            voiceVerifying.value = false
+            safetyMsg.value = if (ok) true to "Voice verified — that is you." else false to "Voice did not match the enrolled voice."
+            if (ok) runCatching { c.cloud.recordVoiceprintVerified(uid) }
+        }
+    }
+    fun clearVoicePrint() { c.voicePrint.clear(); voicePrintEnrolled.value = false; voicePrintGate.value = false; safetyMsg.value = true to "Voice-print removed." }
+    fun enrolFacePrint(bitmap: Bitmap) {
+        viewModelScope.launch {
+            val ok = c.facePrint.enroll(bitmap)
+            facePrintEnrolled.value = c.facePrint.enrolled
+            safetyMsg.value = if (ok) true to "Face enrolled. Face Lock will lock the phone for other faces."
+                else false to "No face found in the photo. Try again with a clear front photo."
+            if (ok) runCatching { c.cloud.recordActivity(uid, "face_recognition", mapOf("action" to "enrol")) }
+        }
+    }
+    fun clearFacePrint() { c.facePrint.clear(); facePrintEnrolled.value = false; faceLockOn.value = false; safetyMsg.value = true to "Face print removed." }
+
+    // ---- Memory (ConversationMemory — on-device only) ----
     val memoryOn = MutableStateFlow(c.store.memoryOn)
     val memoryAskFirst = MutableStateFlow(c.store.memoryAskFirst)
     fun setMemoryOn(v: Boolean) { c.store.memoryOn = v; memoryOn.value = v }
@@ -172,7 +226,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     fun setEmotion(e: Emotion?) { c.store.emotionId = e?.id; emotionId.value = e?.id }
     fun setResponseStyle(s: String) { c.store.responseStyle = s; responseStyle.value = s }
 
-    // ---- Image Studio (MYRA: Gemini image first, free Pollinations fallback) ----
+    // ---- Image Studio (Gemini image first, free Pollinations fallback) ----
     val imageModel = MutableStateFlow(c.store.imageModel)
     fun setImageModel(m: String) { c.store.imageModel = m; imageModel.value = m }
 
@@ -181,16 +235,16 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val googleMsg = MutableStateFlow<Pair<Boolean, String>?>(null)
     val engine = MutableStateFlow(c.store.voiceEngine)
     fun testGoogle(key: String) {
-        val k = key.ifBlank { c.store.googleTtsKey() }; if (k == null) { googleMsg.value = false to "Pehle Google Cloud API key paste karo."; return }
+        val k = key.ifBlank { c.store.googleTtsKey() }; if (k == null) { googleMsg.value = false to "First paste a Google Cloud API key."; return }
         viewModelScope.launch {
             try { GoogleTtsClient().synthesize(k, googleVoice.value, "Hello, I am RANI AI."); c.store.setGoogleTtsKey(k); googleSaved.value = true; googleMsg.value = true to "Google Voice connected." }
-            catch (e: Exception) { googleMsg.value = false to (e.message?.take(130) ?: "Google Voice connect nahi hua.") }
+            catch (e: Exception) { googleMsg.value = false to (e.message?.take(130) ?: "Google Voice could not connect.") }
         }
     }
     fun removeGoogle() { c.store.setGoogleTtsKey(null); googleSaved.value = false; if (c.store.voiceEngine == "google") setEngine("android"); googleMsg.value = true to "Google Voice key removed." }
     fun setEngine(e: String) { c.store.voiceEngine = e; engine.value = e; pushPrefs() }
 
-    private fun pushPrefs() { val u = uid ?: return; viewModelScope.launch { runCatching { c.cloud.savePreferences(u, provider.value.id, selectedModel.value, null, engine.value, 1.0f, 1.0f, language.value) } } }
+    private fun pushPrefs() { val u = uid ?: return; viewModelScope.launch { runCatching { c.cloud.savePreferences(u, provider.value.id, selectedModel.value, null, engine.value, 1.0f, 1.0f, language.value, c.store.personalityId) } } }
 }
 
 @Composable private fun Section(title: String, icon: ImageVector, content: @Composable ColumnScope.() -> Unit) {
@@ -218,6 +272,10 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
     val googleSaved by vm.googleSaved.collectAsState(); val googleVoice by vm.googleVoice.collectAsState(); val googleMsg by vm.googleMsg.collectAsState()
     val engine by vm.engine.collectAsState()
     val assistantName by vm.assistantName.collectAsState(); val petName by vm.petName.collectAsState()
+    val awarenessOn by vm.awarenessOn.collectAsState(); val faceLockOn by vm.faceLockOn.collectAsState()
+    val voicePrintGate by vm.voicePrintGate.collectAsState(); val voicePrintEnrolled by vm.voicePrintEnrolled.collectAsState()
+    val facePrintEnrolled by vm.facePrintEnrolled.collectAsState(); val screenRecordingOn by vm.screenRecordingOn.collectAsState()
+    val safetyMsg by vm.safetyMsg.collectAsState(); val voiceEnrolling by vm.voiceEnrolling.collectAsState(); val voiceVerifying by vm.voiceVerifying.collectAsState()
     val user by session.user.collectAsState()
     var emotionFamily by remember { mutableStateOf(Emotions.families.first()) }
     var nameDraft by remember(assistantName) { mutableStateOf(assistantName) }
@@ -227,6 +285,12 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
     var key by remember(provider) { mutableStateOf("") }; var showKey by remember { mutableStateOf(false) }
     var gKey by remember { mutableStateOf("") }; var gShow by remember { mutableStateOf(false) }
     var modelMenu by remember { mutableStateOf(false) }
+    val facePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bmp -> if (bmp != null) vm.enrolFacePrint(bmp) }
+    val cameraPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok -> if (ok) facePhoto.launch(null) }
+    fun enrolFace() {
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) facePhoto.launch(null)
+        else cameraPerm.launch(Manifest.permission.CAMERA)
+    }
 
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         TopBar("Settings", onBack)
@@ -234,7 +298,7 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
             item {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Image(painterResource(R.drawable.rani_face), "RANI", Modifier.size(54.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                        RaniAvatar(54.dp)
                         Column(Modifier.padding(start = 12.dp)) {
                             Text(assistantName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             Text(user?.email ?: "Signed in", color = Mute, style = MaterialTheme.typography.bodySmall)
@@ -245,20 +309,20 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
             }
             item { Text("AI SETTINGS", color = Mute, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(start = 4.dp)) }
 
-            // ---- Profile (MYRA SettingsPage) ----
+            // ---- Profile ----
             item { Section("Profile", Icons.Default.Person) {
-                Text("RANI tumhe kis naam se bulaye? Pet name hamesha wahi rahega — jaise \"Babu Jaan\".", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("What should RANI call you? The pet name is used in her voice only.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 OutlinedTextField(nameDraft, { nameDraft = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Assistant name") })
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(petDraft, { petDraft = it }, Modifier.weight(1f), singleLine = true, label = { Text("Pet name (tumhara naam)") })
+                    OutlinedTextField(petDraft, { petDraft = it }, Modifier.weight(1f), singleLine = true, label = { Text("Pet name (your name)") })
                     Button({ vm.setAssistantName(nameDraft); vm.setPetName(petDraft) }) { Text("Save") }
                 }
             } }
 
-            // ---- Language (MYRA: 148 languages + search) ----
+            // ---- Language (148 languages + search) ----
             item { Section("Language", Icons.Default.Language) {
-                Text("RANI isi language mein sunegi aur bolegi — ${RaniLanguages.all.size} languages. Auto = khud pehchan legi.", style = MaterialTheme.typography.bodySmall, color = Mute)
-                OutlinedTextField(langSearch, { langSearch = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Language dhoondo…") })
+                Text("RANI will listen and speak in this language — ${RaniLanguages.all.size} languages. Auto detects it herself.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                OutlinedTextField(langSearch, { langSearch = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Search languages…") })
                 val q = langSearch.trim().lowercase()
                 val shown = RaniLanguages.all.filter { q.isEmpty() || it.second.lowercase().contains(q) || it.third.lowercase().contains(q) }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -267,12 +331,12 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
                         FilterChip(lang == code, { vm.setLanguage(code) }, { Text(if (native == en) en else "$en · $native") })
                     }
                 }
-                if (shown.size > 40) Text("…aur ${shown.size - 40} — search karke dhoondo.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                if (shown.size > 40) Text("…and ${shown.size - 40} more — search to find them.", style = MaterialTheme.typography.bodySmall, color = Mute)
             } }
 
-            // ---- Connections / Gemini API (MYRA: Gemini API — BYOK) ----
+            // ---- Connections / Gemini API (BYOK — user enters their own free key) ----
             item { Section("Connections — Gemini API", Icons.Default.Key) {
-                Text("RANI tumhari apni free Gemini key se chalti hai — koi built-in key nahi. Key sirf is phone par encrypted rehti hai. Google AI Studio se free key lo, yahan paste karo, Test & save dabao.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("RANI runs on your own free Gemini key — there is no built-in key. The key stays encrypted on this phone only. Get a free key from Google AI Studio, paste it here, and press Test & save.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { Provider.entries.forEach { p -> FilterChip(provider == p, { vm.selectProvider(p) }, { Text(p.label) }) } }
                 OutlinedTextField(key, { key = it }, Modifier.fillMaxWidth(), label = { Text(if (keySaved) "API key saved (paste a new one to replace)" else "${provider.label} API key") }, singleLine = true,
                     visualTransformation = if (showKey) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -288,9 +352,9 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
                 if (keySaved && models.isEmpty()) Text("Press Test & save to load the list of models for your key.", style = MaterialTheme.typography.bodySmall, color = Mute)
             } }
 
-            // ---- Voice & model (MYRA VoicePage: female voices + live model RadioList) ----
+            // ---- Voice & model (female voices + live model) ----
             item { Section("Voice & model — Live voice", Icons.Default.RecordVoiceOver) {
-                Text("Voice Call Gemini Live par chalti hai — Google ki asli insani ladkiyon ki awaazein. Saari voices female hain, default Aoede (MYRA wali).", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("Voice Call runs on Gemini Live — Google's real human-like female voices. All voices are female, default Aoede.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Use Live voice on Voice Call", Modifier.weight(1f)); Switch(liveEnabled, vm::setLiveEnabled) }
                 Text("Live model chuno:", style = MaterialTheme.typography.labelLarge, color = Gold)
                 LiveModels.all.forEach { m ->
@@ -299,24 +363,24 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
                         Column { Text(m.label, style = MaterialTheme.typography.bodyLarge); Text("${m.modelId} · ${m.version}", style = MaterialTheme.typography.bodySmall, color = Mute) }
                     }
                 }
-                Text("RANI ki voices — saari female:", style = MaterialTheme.typography.labelLarge, color = Gold)
+                Text("RANI's voices — all female:", style = MaterialTheme.typography.labelLarge, color = Gold)
                 LiveVoices.female.forEach { v ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         RadioButton(liveVoiceName == v.name, { vm.setLiveVoice(v) })
                         Column { Text(v.name, style = MaterialTheme.typography.bodyLarge); Text(v.style, style = MaterialTheme.typography.bodySmall, color = Mute) }
                     }
                 }
-                Text("Gemini key: ${if (geminiSaved) "saved hai ✓" else "NAHI daali — Live sirf Gemini key se chalta hai. Connections mein Google Gemini select karke key daalo."}", style = MaterialTheme.typography.bodySmall, color = if (geminiSaved) Ok else Bad)
-                lastLiveError?.let { Text("Aakhri Live koshish ki wajah: $it", style = MaterialTheme.typography.bodySmall, color = Bad) }
+                Text("Gemini key: ${if (geminiSaved) "saved ✓" else "not added — Live only works with a Gemini key. Select Google Gemini in Connections and add your key."}", style = MaterialTheme.typography.bodySmall, color = if (geminiSaved) Ok else Bad)
+                lastLiveError?.let { Text("Last Live attempt failed because: $it", style = MaterialTheme.typography.bodySmall, color = Bad) }
                 Button(vm::testLive, enabled = !liveTesting) { if (liveTesting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("Test Live voice") }
                 Msg(liveMsg)
-                Text("Voice sunne ke liye Voice Call kholo — wahan live baat hogi isi voice mein.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("Open Voice Call to hear this voice — the live call uses it.", style = MaterialTheme.typography.bodySmall, color = Mute)
             } }
 
-            // ---- Session (live) (MYRA SettingsPage: Session panel + resumption ON) ----
+            // ---- Session (live) (Session panel + resumption ON) ----
             item { Section("Session (live)", Icons.Default.Psychology) {
-                Text("Live model: ${liveModel ?: "abhi confirm nahi"}", style = MaterialTheme.typography.bodySmall, color = if (liveModel != null) Ok else Mute)
-                Text("Session resumption ON hai — call kat jaye to RANI wahi se baat dobara shuru karti hai, \"Hello\" dobara nahi kehti.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("Live model: ${liveModel ?: "not confirmed yet"}", style = MaterialTheme.typography.bodySmall, color = if (liveModel != null) Ok else Mute)
+                Text("Session resumption is ON — if a call drops, RANI resumes from the same point instead of saying \"Hello\" again.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 if (liveCandidates.isNotEmpty()) Text("Tried models: ${liveCandidates.joinToString(", ")}", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Listen mode", Modifier.weight(1f)) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -330,11 +394,11 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Speak chat replies aloud", Modifier.weight(1f)); Switch(speak, vm::setSpeak) }
             } }
 
-            // ---- Orb & Guardian (MYRA SettingsPage) ----
+            // ---- Orb & Guardian ----
             item { Section("Orb & Screen Guardian", Icons.Default.Security) {
-                Text("Floating orb — doosri apps ke upar chhota gola (MYRA style). Tap karo to voice call, long-press karo to gayab. Pehli baar Android overlay permission mangega.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("Floating orb — a small bubble over other apps. Tap it for a voice call, long-press to hide it. The first time, Android asks for overlay permission.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text("Floating orb"); Text("Doosri apps ke upar", style = MaterialTheme.typography.bodySmall, color = Mute) }
+                    Column(Modifier.weight(1f)) { Text("Floating orb"); Text("Over other apps", style = MaterialTheme.typography.bodySmall, color = Mute) }
                     Switch(orbOn, { on ->
                         orbOn = on
                         if (on) {
@@ -348,32 +412,57 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
                 Text("UI scale: $orbUiScale%", style = MaterialTheme.typography.bodySmall)
                 Slider(orbUiScale.toFloat(), { vm.setOrbUiScale(it.toInt()) }, valueRange = 60f..140f)
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Low-power mode", Modifier.weight(1f)); Switch(low, vm::setLowPower) }
-                Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Screen Guardian"); Text("Screen share ON ho to RANI screen par nazar rakhti hai aur sensitive cheez (password / bank / OTP) par warning deti hai.", style = MaterialTheme.typography.bodySmall, color = Mute) }; Switch(guardianEnabled, vm::setGuardianEnabled) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Screen Guardian"); Text("When Screen Share is ON, RANI watches the screen and warns about sensitive content (password / bank / OTP).", style = MaterialTheme.typography.bodySmall, color = Mute) }; Switch(guardianEnabled, vm::setGuardianEnabled) }
                 if (guardianEnabled) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(30, 45, 90).forEach { s -> FilterChip(guardianInterval == s, { vm.setGuardianInterval(s) }, { Text("$s sec") }) }
                 }
             } }
 
-            // ---- Memory (MYRA ConversationMemory) ----
-            item { Section("Memory", Icons.Default.Memory) {
-                Text("RANI tumhari baatein yaad rakhti hai — sirf is phone par. Kabhi upload nahi hoti.", style = MaterialTheme.typography.bodySmall, color = Mute)
-                Row(verticalAlignment = Alignment.CenterVertically) { Text("Yaad rakhna ON hai", Modifier.weight(1f)); Switch(memoryOn, vm::setMemoryOn) }
-                Row(verticalAlignment = Alignment.CenterVertically) { Text("Save karne se pehle poochna", Modifier.weight(1f)); Switch(memoryAskFirst, vm::setMemoryAskFirst) }
-                Text("Special days aur favourites Memory screen par manage karo.", style = MaterialTheme.typography.bodySmall, color = Mute)
+            // ---- Stonic & Safety (RANI extras beyond Stonic) ----
+            item { Section("Stonic & Safety", Icons.Default.Security) {
+                Text("Stonic-style awareness plus RANI's own safety: voice-print, Face Lock and screen recording. Everything here is on-device — face and voice prints never leave this phone.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Awareness", Modifier.weight(1f)); Switch(awarenessOn, vm::setAwareness) }
+                Text("RANI notices which app is in front and for how long. ON by default — switch it off anytime.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Face Lock", Modifier.weight(1f)); Switch(faceLockOn, vm::setFaceLock) }
+                Text("When a different face is detected, RANI locks the phone. Face print is encrypted on this phone and never sent anywhere. OFF by default.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button({ enrolFace() }) { Text(if (facePrintEnrolled) "Re-enrol my face" else "Enrol my face") }
+                    if (facePrintEnrolled) TextButton(vm::clearFacePrint) { Text("Remove") }
+                }
+                Text(if (facePrintEnrolled) "Face enrolled ✓" else "No face enrolled yet.", style = MaterialTheme.typography.bodySmall, color = if (facePrintEnrolled) Ok else Mute)
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Voice-print gate", Modifier.weight(1f)); Switch(voicePrintGate, vm::setVoicePrintGate) }
+                Text("Once your voice is enrolled, RANI only talks to you. Voice print is encrypted on this phone and never sent anywhere.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(vm::enrolVoicePrint, enabled = !voiceEnrolling) { if (voiceEnrolling) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text(if (voicePrintEnrolled) "Re-enrol my voice" else "Enrol my voice") }
+                    if (voicePrintEnrolled) OutlinedButton(vm::verifyVoicePrint, enabled = !voiceVerifying) { if (voiceVerifying) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("Verify") }
+                    if (voicePrintEnrolled) TextButton(vm::clearVoicePrint) { Text("Remove") }
+                }
+                Text(if (voicePrintEnrolled) "Voice enrolled ✓ — speak three short samples to enrol." else "No voice enrolled yet — enrolment takes three short voice samples.", style = MaterialTheme.typography.bodySmall, color = if (voicePrintEnrolled) Ok else Mute)
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Screen recording", Modifier.weight(1f)); Switch(screenRecordingOn, vm::setScreenRecording) }
+                Text("What RANI sees, she saves as a screen recording on this phone. Recordings never leave the phone — view or delete them in Recordings.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Msg(safetyMsg)
             } }
 
-            // ---- Image Studio (MYRA: Gemini image + free fallback) ----
+            // ---- Memory ----
+            item { Section("Memory", Icons.Default.Memory) {
+                Text("RANI remembers your conversations — on this phone only. Nothing is ever uploaded.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Remembering is ON", Modifier.weight(1f)); Switch(memoryOn, vm::setMemoryOn) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Ask before saving", Modifier.weight(1f)); Switch(memoryAskFirst, vm::setMemoryAskFirst) }
+                Text("Manage special days and favourites on the Memory screen.", style = MaterialTheme.typography.bodySmall, color = Mute)
+            } }
+
+            // ---- Image Studio (Gemini image + free fallback) ----
             item { Section("Image Studio", Icons.Default.Image) {
-                Text("Chat mein bolo \"image banao\" — RANI khud image bana degi. Pehle Gemini image model (tumhari key), warna free image.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("Say \"make an image\" in chat and RANI will create it herself. Gemini image model (your key) first, otherwise a free image.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(imageModel == "gemini", { vm.setImageModel("gemini") }, { Text("Gemini image") })
                     FilterChip(imageModel == "pollinations", { vm.setImageModel("pollinations") }, { Text("Pollinations (free)") })
                 }
             } }
 
-            // ---- Emotions (BADSHAH base: voice tone follows the emotion) ----
+            // ---- Emotions (voice tone follows the emotion) ----
             item { Section("Emotions", Icons.Default.Favorite) {
-                Text("Auto par RANI tumhare alfaaz se tumhara mood pehchanti hai aur usi emotion mein jawab deti hai. Ya khud koi emotion fix kar lo.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("On Auto, RANI reads your mood from your words and answers in the same emotion. Or fix one emotion yourself.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(emotionId == null, { vm.setEmotion(null) })
                     Column { Text("Auto — reads your mood", style = MaterialTheme.typography.bodyLarge); Text("Recommended", style = MaterialTheme.typography.bodySmall, color = Mute) }
@@ -392,7 +481,7 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
 
             // ---- Look & feel ----
             item { Section("Look & feel", Icons.Default.AutoAwesome) {
-                Text("Face & logo — Home aur Voice Call ke orb mein yahi nazar ayega.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("Face & logo — this is what you see on Home and in Voice Call.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(avatarChoice == "girl", { vm.setAvatar("girl") }, { Text("RANI face") })
                     FilterChip(avatarChoice == "logo", { vm.setAvatar("logo") }, { Text("Crown logo") })
@@ -407,7 +496,7 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
 
             // ---- Google Voice (optional, female voices only) ----
             item { Section("Google Voice (optional)", Icons.Default.RecordVoiceOver) {
-                Text("Google ki premium female awaazein chat replies ke liye — phone ki robot awaaz se zyada natural. Apni Google Cloud API key lagao (Text-to-Speech API enable karo). Key sirf is phone par rehti hai.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("Google's premium female voices for chat replies — more natural than the phone's robot voice. Add your Google Cloud API key (enable the Text-to-Speech API). The key stays on this phone only.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 OutlinedTextField(gKey, { gKey = it }, Modifier.fillMaxWidth(), label = { Text(if (googleSaved) "Google Cloud key saved" else "Google Cloud API key") }, singleLine = true,
                     visualTransformation = if (gShow) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     trailingIcon = { TextButton({ gShow = !gShow }) { Text(if (gShow) "Hide" else "Show") } })
@@ -434,6 +523,12 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun TopBar(title: String, onBack: () -> Unit) {
-    TopAppBar(title = { Text(title) }, navigationIcon = { IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-        colors = TopAppBarDefaults.topAppBarColors(containerColor = androidx.compose.ui.graphics.Color.Transparent))
+    // Stonic top bar: bold title, back button, and the RANI avatar medallion
+    // (head/shoulders crop in a rounded rectangle — never a circle).
+    TopAppBar(
+        title = { Text(title, fontWeight = FontWeight.Bold) },
+        navigationIcon = { IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+        actions = { RaniAvatar(36.dp, modifier = Modifier.padding(end = 12.dp)) },
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+    )
 }

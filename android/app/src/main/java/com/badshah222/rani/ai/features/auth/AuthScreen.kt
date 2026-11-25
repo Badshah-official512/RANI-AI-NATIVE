@@ -2,19 +2,14 @@ package com.badshah222.rani.ai.features.auth
 
 import android.app.Activity
 import android.app.Application
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
@@ -29,6 +24,7 @@ import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.auth.FirebaseUser
 import com.badshah222.rani.ai.RaniApp
 import com.badshah222.rani.ai.R
+import com.badshah222.rani.ai.ui.stonic.RaniAvatar
 import com.badshah222.rani.ai.ui.theme.Gold
 import com.badshah222.rani.ai.ui.theme.Mute
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -100,7 +96,7 @@ fun AuthScreen(vm: SessionViewModel, activity: Activity) {
     val loading by vm.loading.collectAsState(); val error by vm.error.collectAsState(); val info by vm.info.collectAsState()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding().navigationBarsPadding().imePadding().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Spacer(Modifier.height(24.dp))
-        Image(painterResource(R.drawable.rani_face), null, Modifier.size(120.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+        RaniAvatar(120.dp, corner = 20.dp)
         Spacer(Modifier.height(12.dp))
         Text("RANI AI", style = MaterialTheme.typography.headlineMedium, color = Gold)
         Text(stringResourceTagline(), style = MaterialTheme.typography.labelMedium, color = Mute, textAlign = TextAlign.Center)

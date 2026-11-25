@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import com.badshah222.rani.ai.R
 import com.badshah222.rani.ai.core.Config
 import com.badshah222.rani.ai.features.settings.TopBar
+import com.badshah222.rani.ai.ui.stonic.RaniAvatar
 import com.badshah222.rani.ai.ui.theme.*
 
 private data class Social(val name: String, val handle: String, val url: String)
@@ -37,7 +38,8 @@ fun AboutScreen(onBack: () -> Unit) {
         TopBar("About RANI AI", onBack)
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
             item {
-                Image(painterResource(R.drawable.rani_poster), "RANI AI — Chat. Create. Imagine.", Modifier.fillMaxWidth().height(190.dp).clip(RoundedCornerShape(20.dp)), contentScale = ContentScale.Crop)
+                // The character, full figure (never circular, never the poster).
+                Image(painterResource(R.drawable.rani_character), "RANI AI — your AI girlfriend", Modifier.fillMaxWidth().height(320.dp), contentScale = ContentScale.Fit)
             }
             item {
                 Text("RANI AI GF", style = MaterialTheme.typography.headlineMedium, color = Gold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
@@ -47,7 +49,7 @@ fun AboutScreen(onBack: () -> Unit) {
             item {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp)) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Image(painterResource(R.drawable.rani_creator), "Creator — BADSHAH222", Modifier.size(54.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                        RaniAvatar(54.dp)
                         Column(Modifier.padding(start = 12.dp)) {
                             Text("Created by BADSHAH222", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                             Text("Zain Shah · Swabi, Pakistan", color = Mute, style = MaterialTheme.typography.bodySmall)
