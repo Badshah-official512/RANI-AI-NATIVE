@@ -45,6 +45,7 @@
 
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
 
     <queries>
         <intent><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent>
@@ -89,6 +90,12 @@
         <service android:name=".core.CallService" android:exported="false" android:foregroundServiceType="microphone" />
         <service
             android:name=".core.ScreenShareService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <!-- Screen recording: saves what RANI sees as an on-device MP4 (Camera View screen). -->
+        <service
+            android:name=".core.ScreenRecordService"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 

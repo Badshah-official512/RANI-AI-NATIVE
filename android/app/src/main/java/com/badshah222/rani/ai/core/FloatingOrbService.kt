@@ -62,7 +62,7 @@ class FloatingOrbService : Service() {
         super.onCreate()
         wm = getSystemService(WindowManager::class.java)
         val sizePx = (76 * resources.displayMetrics.density).toInt()
-        val bmp = runCatching { BitmapFactory.decodeResource(resources, R.drawable.rani_face) }.getOrNull()
+        val bmp = runCatching { BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher_round) }.getOrNull()
         val iv = AgenticOrbView(this, bmp).apply { contentDescription = "RANI AI" }
         val type = if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
@@ -126,7 +126,7 @@ class FloatingOrbService : Service() {
 }
 
 /**
- * v7.5 agentic orb: character photo inside a rotating neon arc-ring
+ * v7.5 agentic orb: the RANI orb image inside a rotating neon arc-ring
  * (purple / blue / green), a breathing halo behind it, and a pulsing
  * green LIVE dot — the same visual language as the call screen.
  */
@@ -165,7 +165,7 @@ class AgenticOrbView(ctx: Context, private val bmp: Bitmap?) : View(ctx) {
         haloPaint.color = Color.argb((36 + pulse * 46).toInt(), 139, 61, 255)
         canvas.drawCircle(cx, cy, faceR + 5f * d + pulse * 3.5f * d, haloPaint)
 
-        // face: photo (circle-cropped) or dark disc
+        // face: orb image (circle-cropped) or dark disc
         if (bmp != null) {
             clip.reset(); clip.addCircle(cx, cy, faceR, Path.Direction.CW)
             canvas.save(); canvas.clipPath(clip)

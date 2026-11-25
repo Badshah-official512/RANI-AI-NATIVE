@@ -5,7 +5,7 @@ import java.net.URLEncoder
 /**
  * Pollinations.ai — free image generation that needs NO key.
  * Used as the fallback when the user's Gemini key has no image model.
- * (The old FT Fusion chat fallback is gone: RANI chats only on the user's own keys.)
+ * RANI chats only on the user's own keys.
  */
 object Pollinations {
     fun imageUrl(prompt: String): String {

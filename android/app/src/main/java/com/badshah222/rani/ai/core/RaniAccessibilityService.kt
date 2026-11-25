@@ -33,7 +33,23 @@ class RaniAccessibilityService : AccessibilityService() {
     }
 
     override fun onServiceConnected() { instance = this }
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) { }
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Stonic-style Awareness: notice which app/window comes to the front.
+        // Only the package name + app label are recorded, on-device only.
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val pkg = event.packageName?.toString() ?: return
+            if (pkg == packageName) return // our own app is not "another app"
+            val label = runCatching {
+                val info = if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    packageManager.getApplicationInfo(pkg, android.content.pm.PackageManager.ApplicationInfoFlags.of(0))
+                } else {
+                    @Suppress("DEPRECATION") packageManager.getApplicationInfo(pkg, 0)
+                }
+                packageManager.getApplicationLabel(info).toString()
+            }.getOrNull() ?: pkg
+            AwarenessMonitor.onWindow(pkg, label)
+        }
+    }
     override fun onInterrupt() { }
     override fun onDestroy() {
         if (instance === this) instance = null

@@ -136,7 +136,7 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
         thread(isDaemon = true) {
             Thread.sleep(12000)
             if (running && !setupDone && tok == attemptToken) {
-                nextOrFail(key, "Live connection 12 second mein nahi bana (model: ${att.model}). Internet slow hai ya ye model key par nahi chala — Settings → Live Voice mein Test karke dekho.")
+                nextOrFail(key, "Live connection did not start in 12 seconds (model: ${att.model}). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.")
             }
         }
         val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${att.version}.GenerativeService.BidiGenerateContent?key=$key"

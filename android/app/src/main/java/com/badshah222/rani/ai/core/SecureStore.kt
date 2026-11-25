@@ -117,4 +117,27 @@ class SecureStore(context: Context) {
     // ---- MYRA Automation: tasks & reminders (JSON list, local only) ----
     /** Tasks as JSON: [{"id":"..","title":"..","due":"..","status":"pending|done"}]. */
     var tasksJson: String get() = prefs.getString("tasks", "[]") ?: "[]"; set(v) = prefs.edit().putString("tasks", v).apply()
+
+    // ---- Stonic: Awareness, Face Lock, voice-print, screen recording ----
+    /** Awareness (front-app notice) — ON by default, Stonic-style; user can switch it off anytime. */
+    var awarenessEnabled: Boolean get() = prefs.getBoolean("awareness_enabled", true); set(v) = prefs.edit().putBoolean("awareness_enabled", v).apply()
+    /** First-run Awareness notice shown once and dismissed. */
+    var awarenessNoticeShown: Boolean get() = prefs.getBoolean("awareness_notice_shown", false); set(v) = prefs.edit().putBoolean("awareness_notice_shown", v).apply()
+    /** Face Lock — locks RANI when a different face is detected. OFF by default. */
+    var faceLockEnabled: Boolean get() = prefs.getBoolean("face_lock_enabled", false); set(v) = prefs.edit().putBoolean("face_lock_enabled", v).apply()
+    /** Enrolled boss face-print (Base64 float vector) — encrypted, on-device only, never uploaded. */
+    var facePrintProfile: String? get() = secrets.getString("face_print", null); set(v) = secrets.edit().apply { if (v == null) remove("face_print") else putString("face_print", v) }.apply()
+    /** Enrolled boss voice-print (Base64 float vector) — encrypted, on-device only, never uploaded. */
+    var voicePrintProfile: String? get() = secrets.getString("voice_print", null); set(v) = secrets.edit().apply { if (v == null) remove("voice_print") else putString("voice_print", v) }.apply()
+    /** Voice-print gate — when ON, RANI only starts a voice session for the enrolled boss voice. OFF by default. */
+    var voicePrintGate: Boolean get() = prefs.getBoolean("voice_print_gate", false); set(v) = prefs.edit().putBoolean("voice_print_gate", v).apply()
+    /** Screen recording allowed (user toggle; admin panel can override via remote config). OFF by default. */
+    var screenRecordingEnabled: Boolean get() = prefs.getBoolean("screen_recording_enabled", false); set(v) = prefs.edit().putBoolean("screen_recording_enabled", v).apply()
+    /** Floating orb allowed (user toggle; needs the overlay permission, granted by the user in Settings). OFF by default. */
+    var floatingOrbEnabled: Boolean get() = prefs.getBoolean("floating_orb_enabled", false); set(v) = prefs.edit().putBoolean("floating_orb_enabled", v).apply()
+    /** Last good remote config from the RANI admin panel (app_settings), cached as JSON. */
+    var remoteConfigJson: String get() = prefs.getString("remote_config_json", "{}") ?: "{}"; set(v) = prefs.edit().putString("remote_config_json", v).apply()
+    /** Cached "Three things for you today" briefing (JSON) + the day it was made (yyyy-MM-dd). */
+    var briefingJson: String get() = prefs.getString("briefing_json", "") ?: ""; set(v) = prefs.edit().putString("briefing_json", v).apply()
+    var briefingDate: String get() = prefs.getString("briefing_date", "") ?: ""; set(v) = prefs.edit().putString("briefing_date", v).apply()
 }

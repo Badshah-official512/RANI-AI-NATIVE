@@ -1,5 +1,6 @@
 package com.badshah222.rani.ai.data.ai
 
+import com.badshah222.rani.ai.core.RaniRemoteConfig
 import com.badshah222.rani.ai.core.SecureStore
 import com.badshah222.rani.ai.data.supabase.SupabaseApi
 import com.badshah222.rani.ai.domain.*
@@ -12,7 +13,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Provider switching + per-user keys + usage reporting. There is NO shared developer key anywhere. Chat runs only on the user's own keys (Gemini / Groq / OpenRouter). */
-class AiRepository(private val store: SecureStore, private val cloud: SupabaseApi) {
+class AiRepository(private val store: SecureStore, private val cloud: SupabaseApi, private val remoteConfig: RaniRemoteConfig? = null) {
     private val clients = mapOf(Provider.GEMINI to GeminiClient(), Provider.GROQ to GroqClient(), Provider.OPENROUTER to OpenRouterClient())
     private fun client(p: Provider) = clients.getValue(p)
 
@@ -61,7 +62,9 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
     ): AiReply {
         val p = store.provider
         val key = store.apiKey(p) ?: throw AiException("no_key", "no key", "Add your ${p.label} API key in Settings to start chatting.")
-        val model = store.model(p) ?: throw AiException("no_model", "no model", "Test your ${p.label} connection and choose a model in Settings.")
+        // Panel default (gemini group, seed "gemini-3.8-flash") when the user has not picked a model yet.
+        val model = store.model(p) ?: if (p == Provider.GEMINI) remoteConfig?.geminiModel() else null
+            ?: throw AiException("no_model", "no model", "Test your ${p.label} connection and choose a model in Settings.")
         return try {
             val reply = client(p).chat(key, model, systemOverride ?: systemPrompt(emotionStyle), history.takeLast(20))
             cloud.recordUsage(p.id, model, "chat", true, reply.inputTokens, reply.outputTokens, reply.latencyMs.toInt(), null)
@@ -80,9 +83,10 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
     suspend fun describeImage(bytes: ByteArray, question: String): String {
         val key = store.apiKey(Provider.GEMINI) ?: throw AiException(
             "no_key", "no gemini key",
-            "Vision ke liye pehle Settings → Connections mein apni Google Gemini key lagao, Babu Jaan.",
+            "To use vision, first add your Google Gemini key in Settings > Connections.",
         )
-        val model = "gemini-2.5-flash"
+        val model = store.model(Provider.GEMINI)?.takeIf { it.contains("flash") || it.contains("pro") }
+            ?: remoteConfig?.geminiModel() ?: "gemini-2.5-flash"
         val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
         val payload = JSONObject()
             .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray()
@@ -96,11 +100,11 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
         return withContext(Dispatchers.IO) {
             http.newCall(req).execute().use { res ->
                 val bodyStr = res.body?.string().orEmpty()
-                if (!res.isSuccessful) throw AiException("vision_${res.code}", bodyStr.take(160), "Vision ne jawab nahi diya (HTTP ${res.code}). Key check karo, Babu Jaan.")
+                if (!res.isSuccessful) throw AiException("vision_${res.code}", bodyStr.take(160), "Vision did not answer (HTTP ${res.code}). Please check the key.")
                 val text = JSONObject(bodyStr).optJSONArray("candidates")?.optJSONObject(0)
                     ?.optJSONObject("content")?.optJSONArray("parts")
                     ?.optJSONObject(0)?.optString("text").orEmpty()
-                if (text.isBlank()) throw AiException("vision_empty", "empty", "Vision ne kuch nahi bataya.")
+                if (text.isBlank()) throw AiException("vision_empty", "empty", "Vision did not describe anything.")
                 text.trim()
             }
         }
@@ -114,7 +118,7 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
     suspend fun generateImage(prompt: String): ByteArray {
         val key = store.apiKey(Provider.GEMINI) ?: throw AiException(
             "no_key", "no gemini key",
-            "Image banane ke liye pehle Settings → API Keys mein apni Google Gemini key lagao, Babu Jaan.",
+            "To create an image, first add your Google Gemini key in Settings > API Keys.",
         )
         val model = "gemini-2.5-flash-image"
         val t0 = System.currentTimeMillis()
@@ -129,7 +133,7 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
         val bytes = withContext(Dispatchers.IO) {
             http.newCall(req).execute().use { res ->
                 val bodyStr = res.body?.string().orEmpty()
-                if (!res.isSuccessful) throw AiException("image_${res.code}", bodyStr.take(160), "Gemini image ne jawab nahi diya (HTTP ${res.code}). Key check karo ya thodi dair baad try karo, Babu Jaan.")
+                if (!res.isSuccessful) throw AiException("image_${res.code}", bodyStr.take(160), "Gemini image did not answer (HTTP ${res.code}). Please check the key or try again shortly.")
                 val parts = JSONObject(bodyStr).optJSONArray("candidates")?.optJSONObject(0)
                     ?.optJSONObject("content")?.optJSONArray("parts")
                 var b64: String? = null
@@ -137,7 +141,7 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
                     b64 = parts.optJSONObject(i)?.optJSONObject("inlineData")?.optString("data")
                     if (!b64.isNullOrBlank()) break
                 }
-                if (b64.isNullOrBlank()) throw AiException("image_empty", "empty", "Gemini ne image nahi banayi. Prompt badal kar dobara try karo, Babu Jaan.")
+                if (b64.isNullOrBlank()) throw AiException("image_empty", "empty", "Gemini did not create an image. Change the prompt and try again.")
                 android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
             }
         }
@@ -152,9 +156,10 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
     suspend fun vision(prompt: String, imageBase64: String, mimeType: String = "image/jpeg"): AiReply {
         val key = store.apiKey(Provider.GEMINI) ?: throw AiException(
             "no_key", "no gemini key",
-            "Screen samajhne ke liye pehle Settings → Connections mein apni Google Gemini API key lagao, Babu Jaan — yehi key Live voice ke liye bhi chahiye hoti hai.",
+            "To understand the screen, first add your Google Gemini API key in Settings > Connections — the same key Live voice needs.",
         )
-        val model = store.model(Provider.GEMINI)?.takeIf { it.contains("flash") || it.contains("pro") } ?: "gemini-2.5-flash"
+        val model = store.model(Provider.GEMINI)?.takeIf { it.contains("flash") || it.contains("pro") }
+            ?: remoteConfig?.geminiModel() ?: "gemini-2.5-flash"
         val t0 = System.currentTimeMillis()
         val payload = JSONObject()
             .put("system_instruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text",
@@ -170,7 +175,7 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
         val text = withContext(Dispatchers.IO) {
             http.newCall(req).execute().use { res ->
                 val bodyStr = res.body?.string().orEmpty()
-                if (!res.isSuccessful) throw AiException("vision_${res.code}", bodyStr.take(160), "Gemini vision ne jawab nahi diya (HTTP ${res.code}). Key check karo ya thodi dair baad try karo, Babu Jaan.")
+                if (!res.isSuccessful) throw AiException("vision_${res.code}", bodyStr.take(160), "Gemini vision did not answer (HTTP ${res.code}). Please check the key or try again shortly.")
                 val parts = JSONObject(bodyStr).optJSONArray("candidates")?.optJSONObject(0)
                     ?.optJSONObject("content")?.optJSONArray("parts")
                 val sb = StringBuilder()
@@ -178,7 +183,7 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
                 sb.toString()
             }
         }
-        if (text.isBlank()) throw AiException("vision_empty", "empty", "Screen parh li, lekin Gemini ne kuch bataya nahi. Dobara try karo, Babu Jaan.")
+        if (text.isBlank()) throw AiException("vision_empty", "empty", "I read the screen, but Gemini said nothing about it. Try again.")
         cloud.recordUsage("gemini", model, "vision", true, 0, 0, (System.currentTimeMillis() - t0).toInt(), null)
         return AiReply(text.trim(), Provider.GEMINI, model, 0, 0, System.currentTimeMillis() - t0)
     }
