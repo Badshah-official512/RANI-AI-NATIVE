@@ -1,0 +1,16 @@
+# ---- RANI AI GF — root gitignore ----
+# google-services.json is NEVER committed (public repo). CI injects it from
+# the GOOGLE_SERVICES_JSON secret; see docs/SETUP-SECRETS.md.
+google-services.json
+android/app/google-services.json
+*.jks
+*.keystore
+keystore.properties
+local.properties
+android/build/
+android/app/build/
+android/.gradle/
+android/.idea/
+*.apk
+*.aab
+.DS_Store
