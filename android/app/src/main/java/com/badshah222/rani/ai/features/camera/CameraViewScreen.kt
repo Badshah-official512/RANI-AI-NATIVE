@@ -2,6 +2,7 @@ package com.badshah222.rani.ai.features.camera
 
 import android.Manifest
 import android.app.Activity
+import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -42,7 +43,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.badshah222.rani.ai.RaniApp
 import com.badshah222.rani.ai.core.ScreenRecordService
-import com.badshah222.rani.ai.data.ai.AiException
+import com.badshah222.rani.ai.domain.AiException
 import com.badshah222.rani.ai.features.settings.TopBar
 import com.badshah222.rani.ai.ui.theme.*
 import kotlinx.coroutines.Dispatchers

@@ -63,7 +63,7 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
         val p = store.provider
         val key = store.apiKey(p) ?: throw AiException("no_key", "no key", "Add your ${p.label} API key in Settings to start chatting.")
         // Panel default (gemini group, seed "gemini-3.8-flash") when the user has not picked a model yet.
-        val model = store.model(p) ?: if (p == Provider.GEMINI) remoteConfig?.geminiModel() else null
+        val model = store.model(p) ?: (if (p == Provider.GEMINI) remoteConfig?.geminiModel() else null)
             ?: throw AiException("no_model", "no model", "Test your ${p.label} connection and choose a model in Settings.")
         return try {
             val reply = client(p).chat(key, model, systemOverride ?: systemPrompt(emotionStyle), history.takeLast(20))

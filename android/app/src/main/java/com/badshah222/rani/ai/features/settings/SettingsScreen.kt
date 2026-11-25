@@ -381,7 +381,7 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
             item { Section("Session (live)", Icons.Default.Psychology) {
                 Text("Live model: ${liveModel ?: "not confirmed yet"}", style = MaterialTheme.typography.bodySmall, color = if (liveModel != null) Ok else Mute)
                 Text("Session resumption is ON — if a call drops, RANI resumes from the same point instead of saying \"Hello\" again.", style = MaterialTheme.typography.bodySmall, color = Mute)
-                if (liveCandidates.isNotEmpty()) Text("Tried models: ${liveCandidates.joinToString(", ")}", style = MaterialTheme.typography.bodySmall, color = Mute)
+                if (liveCandidates.isNotEmpty()) Text("Tried models: ${liveCandidates.split(",").joinToString(", ")}", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Listen mode", Modifier.weight(1f)) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     RaniTools.listenModes.forEach { m -> FilterChip(listenMode == m, { vm.setListenMode(m) }, { Text(RaniTools.listenLabel(m)) }) }

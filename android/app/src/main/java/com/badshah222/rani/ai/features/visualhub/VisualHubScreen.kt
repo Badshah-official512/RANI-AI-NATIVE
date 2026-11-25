@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.badshah222.rani.ai.RaniApp
-import com.badshah222.rani.ai.data.ai.AiException
+import com.badshah222.rani.ai.domain.AiException
 import com.badshah222.rani.ai.features.settings.TopBar
 import com.badshah222.rani.ai.ui.theme.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -167,10 +167,10 @@ fun VisualHubScreen(vm: VisualHubViewModel, onBack: () -> Unit, onNav: (String) 
                 Text("Try one:", style = MaterialTheme.typography.labelLarge, color = Mute, modifier = Modifier.padding(top = 12.dp))
                 SUGGESTIONS.forEachIndexed { i, s ->
                     Card(
-                        Modifier.fillMaxWidth().padding(top = 6.dp),
+                        onClick = { draft = s; vm.drawAndExplain(s) },
+                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
                         colors = CardDefaults.cardColors(containerColor = Panel),
                         shape = RoundedCornerShape(12.dp),
-                        onClick = { draft = s; vm.drawAndExplain(s) }
                     ) {
                         Row(Modifier.padding(12.dp)) {
                             Text("${i + 1}.", color = VioletSoft, fontWeight = FontWeight.Bold)

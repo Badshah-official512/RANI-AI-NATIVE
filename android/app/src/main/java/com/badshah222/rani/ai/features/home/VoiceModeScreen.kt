@@ -82,7 +82,7 @@ fun VoiceModeScreen(home: HomeViewModel, settings: SettingsViewModel, onBack: ()
                         Row(verticalAlignment = Alignment.CenterVertically) { Text("Use Live voice on Voice Call", Modifier.weight(1f)); Switch(liveEnabled, settings::setLiveEnabled) }
                         Text("Live model: ${liveModel ?: "abhi confirm nahi"}", style = MaterialTheme.typography.bodySmall, color = if (liveModel != null) Ok else Mute)
                         Text("Session resumption is ON — if a call drops, RANI resumes from the same point.", style = MaterialTheme.typography.bodySmall, color = Mute)
-                        if (liveCandidates.isNotEmpty()) Text("Tried models: ${liveCandidates.joinToString(", ")}", style = MaterialTheme.typography.bodySmall, color = Mute)
+                        if (liveCandidates.isNotEmpty()) Text("Tried models: ${liveCandidates.split(",").joinToString(", ")}", style = MaterialTheme.typography.bodySmall, color = Mute)
                         Button(settings::testLive, enabled = !liveTesting) { if (liveTesting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("Test Live voice") }
                         liveMsg?.let { Text(it.second, color = if (it.first) Ok else Bad, style = MaterialTheme.typography.bodySmall) }
                     }

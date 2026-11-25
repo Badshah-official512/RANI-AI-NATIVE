@@ -22,7 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.badshah222.rani.ai.RaniApp
-import com.badshah222.rani.ai.data.ai.AiException
+import com.badshah222.rani.ai.domain.AiException
 import com.badshah222.rani.ai.domain.ChatMessage
 import com.badshah222.rani.ai.features.settings.TopBar
 import com.badshah222.rani.ai.ui.theme.*
@@ -230,10 +230,10 @@ fun YourWorldScreen(vm: YourWorldViewModel, onBack: () -> Unit, onAskTopic: (Str
             error?.let { Text(it, color = Bad, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
             items.forEachIndexed { i, item ->
                 Card(
-                    Modifier.fillMaxWidth().padding(top = 10.dp),
+                    onClick = { onAskTopic(item.title) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
                     colors = CardDefaults.cardColors(containerColor = Panel),
                     shape = RoundedCornerShape(16.dp),
-                    onClick = { onAskTopic(item.title) }
                 ) {
                     Row(Modifier.padding(14.dp)) {
                         Text("${i + 1}", color = VioletSoft, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)

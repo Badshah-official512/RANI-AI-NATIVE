@@ -77,7 +77,7 @@ object MessageSender {
         else SendOutcome.Failed("Message likh diya hai, Babu Jaan — Send button nahi mila, aap khud Send dabao.")
     }
 
-    private fun tapSend(svc: RaniAccessibilityService): Boolean {
+    private suspend fun tapSend(svc: RaniAccessibilityService): Boolean {
         if (svc.tapSendButton() == "ok") return true
         delay(500)
         return svc.tapText("send") == "ok"
