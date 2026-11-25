@@ -1,0 +1,163 @@
+# RANI AI GF — Native Android APK build (GitHub Actions)
+#
+# NOTE FOR THE PERSON PUSHING THIS FILE:
+# The GitHub connector CANNOT push .github/workflows/* files (403 — "Resource
+# not accessible by integration"). This file is delivered in the repo tree at
+# upload-via-browser/.github/workflows/android-build.yml and must be pushed
+# via the browser (github.com web upload). Do NOT try to push it with the
+# connector.
+#
+# WHAT IT DOES:
+#   - Builds a DEBUG APK on every push / PR touching android/** (always, no
+#     secrets needed). Before Firebase registration / secrets exist it builds
+#     with a placeholder google-services.json and placeholder Supabase values,
+#     so the debug APK always goes green.
+#   - Injects the real google-services.json from the GOOGLE_SERVICES_JSON
+#     secret (base64) when present, and Supabase values from SUPABASE_URL /
+#     SUPABASE_ANON_KEY when present.
+#   - Builds a SIGNED RELEASE APK only when signing secrets are present
+#     (shared BADSHAH keystore — see docs/SETUP-SECRETS.md).
+#   - No keystore, no google-services.json and no real key is committed.
+#
+# Secrets (repo Settings → Secrets and variables → Actions — NAMES only,
+# never put values in this file): GOOGLE_SERVICES_JSON, SUPABASE_URL,
+# SUPABASE_ANON_KEY, ANDROID_KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS,
+# KEY_PASSWORD.
+name: Android Build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-build.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'android/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Do NOT use android-actions/setup-android — it installs an obsolete
+      # 'tools' SDK package and sdkmanager fails. The ubuntu-latest runner
+      # already ships a working Android SDK (ANDROID_HOME is set).
+      - name: Check preinstalled Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/build-tools" | sort -V | tail -3
+
+      # google-services.json: real one from secret, else a well-formed
+      # placeholder so the google-services plugin does not fail the build.
+      # Firebase Auth will not work with the placeholder — it only exists so
+      # the debug APK builds before Firebase registration is done.
+      - name: Provide google-services.json
+        run: |
+          if [ -n "${{ secrets.GOOGLE_SERVICES_JSON }}" ]; then
+            echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 --decode > app/google-services.json
+            echo "google-services.json injected from secret."
+          else
+            cat > app/google-services.json <<'JSON'
+          {
+            "project_info": {
+              "project_number": "000000000000",
+              "project_id": "placeholder",
+              "storage_bucket": "placeholder.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+                  "android_client_info": { "package_name": "com.badshah222.rani.ai" }
+                },
+                "oauth_client": [{ "client_id": "000000000000-00000000000000000000000000000000.apps.googleusercontent.com", "client_type": 3 }],
+                "api_key": [{ "current_key": "PLACEHOLDER" }],
+                "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          JSON
+            echo "::notice::GOOGLE_SERVICES_JSON secret not set — using placeholder (Firebase login will not work in this build)."
+          fi
+
+      # Supabase values from secrets (SUPABASE_ANON_KEY maps to the Gradle
+      # property SUPABASE_PUBLISHABLE_KEY). Placeholders stay when unset.
+      - name: Inject Supabase values
+        run: |
+          if [ -n "${{ secrets.SUPABASE_URL }}" ]; then
+            sed -i "s|^SUPABASE_URL=.*|SUPABASE_URL=${{ secrets.SUPABASE_URL }}|" gradle.properties
+          fi
+          if [ -n "${{ secrets.SUPABASE_ANON_KEY }}" ]; then
+            sed -i "s|^SUPABASE_PUBLISHABLE_KEY=.*|SUPABASE_PUBLISHABLE_KEY=${{ secrets.SUPABASE_ANON_KEY }}|" gradle.properties
+          fi
+
+      - name: Build debug APK (always)
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
+
+      # NOTE: actions/upload-artifact does NOT inherit
+      # defaults.run.working-directory, so its path is relative to the REPO
+      # ROOT, not android/. The path below must include android/.
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: rani-ai-gf-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      # ---- Signed release: only when ALL signing secrets exist ----
+      - name: Check signing secrets
+        id: signing
+        run: |
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ] && \
+             [ -n "${{ secrets.KEYSTORE_PASSWORD }}" ] && \
+             [ -n "${{ secrets.KEY_ALIAS }}" ] && \
+             [ -n "${{ secrets.KEY_PASSWORD }}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Signing secrets not set — skipping signed release APK (debug APK above is still built)."
+          fi
+
+      - name: Decode keystore
+        if: steps.signing.outputs.present == 'true'
+        run: |
+          # storeFile below is resolved relative to the app module dir (android/app),
+          # so the keystore goes into app/ while keystore.properties stays at android/.
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > app/rani-release.keystore
+          cat > keystore.properties <<EOF
+          storeFile=rani-release.keystore
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.KEY_ALIAS }}
+          keyPassword=${{ secrets.KEY_PASSWORD }}
+          EOF
+
+      - name: Build signed release APK
+        if: steps.signing.outputs.present == 'true'
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Upload signed release APK
+        if: steps.signing.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rani-ai-gf-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
