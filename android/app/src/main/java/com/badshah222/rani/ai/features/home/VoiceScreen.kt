@@ -2,6 +2,7 @@ package com.badshah222.rani.ai.features.home
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -71,11 +72,17 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     var liveMode by remember { mutableStateOf(vm.liveAvailable()) }
     var started by remember { mutableStateOf(false) }
 
+    // System Back during a call = Minimize (same as the Minimize button):
+    // if the overlay permission is missing, ask for it once so the floating
+    // call window can appear over other apps.
+    BackHandler { vm.minimizeCall(); onBack() }
+
     fun begin() {
         if (started) return; started = true
-        // v1.4.0 — NATIVE call only (boss's order: no web page). The Live call
-        // runs on the native Java-WebSocket engine (LiveSession) — a raw socket
-        // inside the APK, no web page at all. The WebView path is removed.
+        // v1.5.0 — HTTP call only (boss's order: no web page). The Live call
+        // runs over plain HTTP streaming (HttpLiveSession → POST /api/live-http)
+        // — NO WebSocket on the phone, no web page at all. The WebView path
+        // is removed.
         if (liveMode) vm.startLiveSession() else vm.requestCall()
     }
     val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
@@ -159,7 +166,7 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(name, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
                 Spacer(Modifier.weight(1f))
-                IconButton(onBack) { Icon(Icons.Default.KeyboardArrowDown, "Minimize") }
+                IconButton({ vm.minimizeCall(); onBack() }) { Icon(Icons.Default.KeyboardArrowDown, "Minimize") }
             }
             Spacer(Modifier.weight(0.7f))
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -253,7 +260,7 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
                     ControlButton(if (callMuted) Icons.Default.Mic else Icons.Default.MicOff, if (callMuted) "Unmute" else "Mute", Panel2, Color.White) { vm.setCallMuted(!callMuted) }
                     ControlButton(Icons.Default.CallEnd, "End", Bad, Color.White, big = true) { vm.endCall(); onBack() }
                 }
-                ControlButton(Icons.Default.KeyboardArrowDown, "Minimize", Panel2, Color.White) { onBack() }
+                ControlButton(Icons.Default.KeyboardArrowDown, "Minimize", Panel2, Color.White) { vm.minimizeCall(); onBack() }
             }
         }
     }

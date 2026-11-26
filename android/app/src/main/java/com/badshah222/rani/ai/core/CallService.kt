@@ -16,8 +16,8 @@ import com.badshah222.rani.ai.MainActivity
 /**
  * Call keep-alive, the way real VoIP apps do it: while a voice call is running,
  * this microphone-type foreground service keeps the app process (and therefore
- * the WebView, its mic capture and the Gemini Live socket) alive when the user
- * minimizes the app or switches to another app. A visible notification shows
+ * the HTTP Live stream, its mic capture and the audio playback) alive when the
+ * user minimizes the app or switches to another app. A visible notification shows
  * the whole time; ending the call stops the service. Started only from a user
  * tap inside the app (micTakeover), never in the background on its own.
  */

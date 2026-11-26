@@ -11,16 +11,26 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.IBinder
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.Button
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
 import com.badshah222.rani.ai.MainActivity
 import com.badshah222.rani.ai.R
+import com.badshah222.rani.ai.RaniApp
+import com.badshah222.rani.ai.data.voice.HttpLiveSession
+import com.badshah222.rani.ai.data.voice.LiveSession
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -34,6 +44,14 @@ import kotlin.math.sin
  * v7.5: agentic look — the orb gets a rotating neon arc-ring, a breathing halo
  * and a live dot; the edge glow becomes two energy comets travelling around the
  * screen border over a soft base glow.
+ *
+ * v1.5.0: floating CALL CARD — while a Live call is active and the app is NOT
+ * in front, this card (character, status, captions, Mute + End) floats over
+ * other apps so the boss can look at something else and keep talking to RANI.
+ * The orb hides while the card is up; tap the card body = back to the full
+ * call screen; Mute/End act on the live call directly. FLAG_NOT_FOCUSABLE, so
+ * the app underneath stays fully usable. The card never touches the mic or
+ * the audio — it only reads the session state and calls setMuted()/stop().
  */
 class FloatingOrbService : Service() {
     companion object {
@@ -45,13 +63,27 @@ class FloatingOrbService : Service() {
     private var wm: WindowManager? = null
     private var orb: AgenticOrbView? = null
     private var glow: EdgeGlowView? = null
+    // v1.5.0 — floating call window (see buildCallCard): shown only while a
+    // Live call is active AND the app is not in front.
+    private var callCard: LinearLayout? = null
+    private var callStatus: TextView? = null
+    private var callCaption: TextView? = null
+    private var callMuteBtn: Button? = null
+    private var httpLive: HttpLiveSession? = null
     private val visHandler = Handler(Looper.getMainLooper())
     private val visLoop = object : Runnable {
         override fun run() {
-            // v7.2: app khud saamne ho to bubble chhupao — sirf doosri apps ke upar dikhao
-            val vis = if (MainActivity.appInForeground) View.GONE else View.VISIBLE
-            orb?.visibility = vis
-            glow?.visibility = vis
+            // v1.5.0: while a call is live, the floating CALL CARD (not the orb)
+            // sits over other apps — status, captions, Mute + End — so the boss
+            // can look at something else and keep talking. The orb hides while
+            // the card is up. When the app itself is in front, both hide (the
+            // full call screen is visible instead).
+            val inCall = httpLive?.isActive == true
+            val fg = MainActivity.appInForeground
+            callCard?.visibility = if (inCall && !fg) View.VISIBLE else View.GONE
+            orb?.visibility = if (!fg && !inCall) View.VISIBLE else View.GONE
+            glow?.visibility = if (!fg) View.VISIBLE else View.GONE
+            if (inCall) updateCallCard()
             visHandler.postDelayed(this, 600)
         }
     }
@@ -109,6 +141,10 @@ class FloatingOrbService : Service() {
         )
         glow = gv
         runCatching { wm?.addView(gv, gParams) }
+        // v1.5.0: floating CALL CARD — built once here, only shown by the
+        // visLoop while a Live call is active (see buildCallCard).
+        httpLive = (application as RaniApp).container.httpLive
+        buildCallCard(bmp, type)
         running = true
         visHandler.post(visLoop)
     }
@@ -119,9 +155,164 @@ class FloatingOrbService : Service() {
         orb?.stopAnim()
         glow?.let { runCatching { wm?.removeView(it) } }
         orb?.let { runCatching { wm?.removeView(it) } }
+        callCard?.let { runCatching { wm?.removeView(it) } }
         glow = null
-        orb = null; running = false
+        orb = null; callCard = null; callStatus = null; callCaption = null; callMuteBtn = null
+        running = false
         super.onDestroy()
+    }
+
+    /**
+     * The floating call window (v1.5.0): a small dark card over other apps —
+     * character thumb + call status, the latest caption line, and Mute + End.
+     * FLAG_NOT_FOCUSABLE so the app underneath stays fully usable; drag the
+     * card body to move it, tap the body (no drag) to reopen the full call
+     * screen. The buttons act on the live HTTP session directly.
+     */
+    private fun buildCallCard(bmp: Bitmap?, type: Int) {
+        val d = resources.displayMetrics.density
+        val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        card.background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = 18f * d
+            setColor(0xE6171130.toInt()) // dark panel, mostly opaque
+            setStroke((1.5f * d).toInt(), 0xFF8B3DFF.toInt())
+        }
+        val pad = (12 * d).toInt()
+        card.setPadding(pad, pad, pad, pad)
+
+        // Row 1: character thumb + status lines
+        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val thumb = ImageView(this).apply {
+            setImageBitmap(bmp)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            layoutParams = LinearLayout.LayoutParams((48 * d).toInt(), (48 * d).toInt())
+        }
+        val texts = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = (10 * d).toInt()
+            }
+        }
+        callStatus = TextView(this).apply {
+            text = "RANI is listening…"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }
+        val sub = TextView(this).apply {
+            text = "RANI AI · Real voice · Gemini Live"
+            setTextColor(Color.argb(200, 190, 180, 255))
+            textSize = 11f
+        }
+        texts.addView(callStatus); texts.addView(sub)
+        row1.addView(thumb); row1.addView(texts)
+        card.addView(row1)
+
+        // Caption line — what RANI just said (or what the user said).
+        callCaption = TextView(this).apply {
+            setTextColor(Color.argb(220, 220, 214, 255))
+            textSize = 12f
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = (8 * d).toInt()
+            }
+            visibility = View.GONE
+        }
+        card.addView(callCaption)
+
+        // Row 2: Mute + End (act on the live session directly).
+        val row2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = (10 * d).toInt()
+            }
+        }
+        callMuteBtn = Button(this).apply {
+            text = "Mute"
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 12f * d
+                setColor(0xFF2A2145.toInt())
+            }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            setOnClickListener { httpLive?.let { it.setMuted(!it.muted.value) } }
+        }
+        val endBtn = Button(this).apply {
+            text = "End"
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 12f * d
+                setColor(0xFFD92D20.toInt())
+            }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = (8 * d).toInt()
+            }
+            setOnClickListener { httpLive?.stop() }
+        }
+        row2.addView(callMuteBtn); row2.addView(endBtn)
+        card.addView(row2)
+
+        // Drag anywhere on the card body; tap (no drag) reopens the full call screen.
+        val params = WindowManager.LayoutParams(
+            (300 * d).toInt(), WindowManager.LayoutParams.WRAP_CONTENT, type,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; x = 0; y = (54 * d).toInt() }
+        var downX = 0; var downY = 0; var startX = 0; var startY = 0; var downAt = 0L
+        card.setOnTouchListener { v, e ->
+            when (e.action) {
+                MotionEvent.ACTION_DOWN -> { downX = e.rawX.toInt(); downY = e.rawY.toInt(); startX = params.x; startY = params.y; downAt = System.currentTimeMillis(); true }
+                MotionEvent.ACTION_MOVE -> {
+                    params.x = startX + (e.rawX.toInt() - downX); params.y = startY + (e.rawY.toInt() - downY)
+                    runCatching { wm?.updateViewLayout(v, params) }; true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val moved = Math.abs(e.rawX.toInt() - downX) + Math.abs(e.rawY.toInt() - downY)
+                    if (moved < 12) {
+                        val i = Intent(this, MainActivity::class.java)
+                            .putExtra("EXTRA_WAKE", "1")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        startActivity(i)
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+        callCard = card
+        card.visibility = View.GONE
+        runCatching { wm?.addView(card, params) }
+    }
+
+    /** Refresh the call card's status, caption and Mute label from the live session. */
+    private fun updateCallCard() {
+        val live = httpLive ?: return
+        callStatus?.text = when (live.state.value) {
+            LiveSession.State.Connecting -> "Connecting…"
+            LiveSession.State.Listening -> "RANI is listening…"
+            LiveSession.State.Thinking -> "RANI is thinking…"
+            LiveSession.State.Speaking -> "RANI is speaking…"
+            LiveSession.State.Error -> "Call ended"
+            LiveSession.State.Idle -> "RANI is ready"
+        }
+        val cap = when {
+            live.assistantText.value.isNotEmpty() -> live.assistantText.value
+            live.userText.value.isNotEmpty() -> "You: ${live.userText.value}"
+            else -> ""
+        }
+        callCaption?.let {
+            it.text = cap
+            it.visibility = if (cap.isEmpty()) View.GONE else View.VISIBLE
+        }
+        callMuteBtn?.text = if (live.muted.value) "Unmute" else "Mute"
     }
 }
 

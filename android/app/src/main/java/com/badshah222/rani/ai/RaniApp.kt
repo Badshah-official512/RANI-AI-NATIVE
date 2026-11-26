@@ -13,6 +13,7 @@ import com.badshah222.rani.ai.data.identity.VoicePrint
 import com.badshah222.rani.ai.data.local.ChatStore
 import com.badshah222.rani.ai.data.phone.PhoneExecutor
 import com.badshah222.rani.ai.data.supabase.SupabaseApi
+import com.badshah222.rani.ai.data.voice.HttpLiveSession
 import com.badshah222.rani.ai.data.voice.LiveSession
 import com.badshah222.rani.ai.data.voice.SpeechInput
 import com.badshah222.rani.ai.data.voice.TtsManager
@@ -36,6 +37,12 @@ class Container(app: Application) {
     val tts = TtsManager(app, store, cloud)
     val speech = SpeechInput(app)
     val live = LiveSession(app, store, worker)
+    // v1.5.0 — the PRIMARY call engine: Gemini Live over HTTP streaming
+    // (HttpLiveSession). The phone's native WebSockets are PROVEN blocked
+    // (OkHttp v1.1.0–v1.2.2 AND Java-WebSocket v1.4.0 both time out at 15 s),
+    // so the phone talks HTTP to the Worker and the Worker holds the Google
+    // Live socket. `live` (Java-WebSocket) stays only as the Settings-test engine.
+    val httpLive = HttpLiveSession(app, store, worker)
     val phone = PhoneExecutor(app)
     val chats = ChatStore(app)
     // Stonic extras: Awareness, identity (voice-print + face-print).

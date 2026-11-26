@@ -115,6 +115,12 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     val floatingOn = MutableStateFlow(c.store.floatingOrbEnabled)
     /** Set when the overlay permission must be granted before the floating orb can start. */
     val needOverlayPermission = MutableStateFlow(false)
+    /** Set when a live call is minimized without the overlay permission — the
+     *  floating call window cannot appear until the user grants it. */
+    val needCallOverlayPermission = MutableStateFlow(false)
+    /** The overlay-permission ask for a call fires at most once per call, so
+     *  minimizing twice does not nag the boss with the Settings screen. */
+    private var callOverlayAsked = false
     /** "checking" while a voice-print sample is being verified. */
     val voiceCheck = MutableStateFlow<String?>(null)
     private var callStartedAt = 0L
@@ -151,6 +157,29 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             FloatingOrbService.start(ctx)
             c.store.floatingOrbEnabled = true
             floatingOn.value = true
+        }
+    }
+
+    /** Minimize during a live call: if the overlay permission is missing, ask
+     *  for it once (one tap in Settings) so the floating call window can
+     *  appear over other apps; otherwise the minimized call would be
+     *  invisible and the boss could only return via the notification. */
+    fun minimizeCall() {
+        if (live.isActive && !Settings.canDrawOverlays(getApplication<Application>()) && !callOverlayAsked) {
+            callOverlayAsked = true
+            needCallOverlayPermission.value = true
+        }
+    }
+
+    /** Called after the user returns from the overlay-permission screen for a call. */
+    fun onCallOverlayGranted() {
+        needCallOverlayPermission.value = false
+        val ctx = getApplication<Application>()
+        if (Settings.canDrawOverlays(ctx)) {
+            FloatingOrbService.start(ctx)
+            // NOTE: floatingOrbEnabled is NOT set here — the service runs only
+            // for this call; HttpLiveSession.stop() stops it again when the
+            // call ends (callStartedOverlay), so no unwanted orb is left behind.
         }
     }
 
@@ -195,8 +224,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { if (voiceGateOk()) { beginCall(); startListening() } }
     }
 
-    // ---- Gemini Live (real human voice) — NATIVE, no web page (v1.4.0) ----
-    val live = c.live
+    // ---- Gemini Live (real human voice) — HTTP streaming, no web page (v1.5.0) ----
+    val live = c.httpLive
     val liveFallback = MutableStateFlow<String?>(null)
     /** Live is available when enabled AND there is any key source: the user's own
      *  Gemini key, OR a Firebase sign-in (the pooled key via /api/live-key —
@@ -204,13 +233,15 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
      *  Requiring only the own key here blocked the pooled-key call for signed-in
      *  users. */
     fun liveAvailable(): Boolean = c.store.liveEnabled && (c.store.apiKey(Provider.GEMINI) != null || c.auth.current != null)
-    /** Native LiveSession entry — the PRIMARY call engine (v1.4.0, boss's order:
-     *  no web page). The call runs on the native Java-WebSocket engine (raw
-     *  socket, plain HTTP/1.1 upgrade, browser-identical handshake, ?key=,
-     *  single attempt gemini-3.8-live via the Worker proxy). The WebView call
-     *  path is removed — the call never opens a web page. If Live cannot run,
-     *  liveFallback fires and the call screen falls back to classic mode. */
+    /** HTTP LiveSession entry — the PRIMARY call engine (v1.5.0, boss's order:
+     *  no web page). The call runs over plain HTTP streaming to the Cloudflare
+     *  Worker (POST /api/live-http) — NO WebSocket on the phone, NO web page:
+     *  the Worker holds the Google Live socket, the phone streams mic PCM up
+     *  and framed audio/text down. Single attempt, gemini-3.8-live only. If
+     *  Live cannot run, liveFallback fires and the call screen falls back to
+     *  classic mode. */
     fun startLiveSession() {
+        callOverlayAsked = false
         liveFallback.value = null
         viewModelScope.launch {
             // Fail fast: if this key offers no Live voice model at all, do not burn
@@ -225,10 +256,10 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             val emo = c.store.emotionId?.let { Emotions.fromId(it) } ?: emotion.value
             // The panel's call greeting opens the Live call (voice-only, never on screen).
             val greeting = c.remoteConfig.callGreeting()
-            c.live.start(c.ai.systemPrompt(emo.style) + "\nStart the call by greeting the user with: \"$greeting\"")
+            c.httpLive.start(c.ai.systemPrompt(emo.style) + "\nStart the call by greeting the user with: \"$greeting\"")
         }
     }
-    fun stopLiveSession() = c.live.stop()
+    fun stopLiveSession() = c.httpLive.stop()
     private var convoId: String? = null
     private var lastAction: PhoneAction? = null
 
@@ -241,7 +272,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         if (uid.isNotEmpty()) messages.value = c.chats.load(uid)
         // Best-effort remote config load (fail-soft: defaults apply when the panel table is not there yet).
         c.remoteConfig.refreshAsync(viewModelScope)
-        c.live.onTurn = { u, a ->
+        c.httpLive.onTurn = { u, a ->
             if (c.store.emotionId == null && u.isNotEmpty()) emotion.value = Emotions.detect(u)
             if (u.isNotEmpty()) add(ChatMessage("user", u))
             if (a.isNotEmpty()) {
@@ -256,7 +287,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
-        c.live.onUnavailable = { reason -> liveFallback.value = reason; c.store.lastLiveError = reason }
+        c.httpLive.onUnavailable = { reason -> liveFallback.value = reason; c.store.lastLiveError = reason }
     }
 
     fun startListening() {
@@ -543,11 +574,24 @@ fun HomeScreen(
         if (ok) vm.requestTalk()
     }
     val overlayPerm = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        vm.onOverlayGranted()
+        // Whichever flow asked for the permission, finish that one.
+        if (vm.needCallOverlayPermission.value) vm.onCallOverlayGranted() else vm.onOverlayGranted()
     }
     val needOverlay by vm.needOverlayPermission.collectAsState()
     LaunchedEffect(needOverlay) {
         if (needOverlay) {
+            runCatching {
+                overlayPerm.launch(
+                    Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + ctx.packageName))
+                )
+            }
+        }
+    }
+    // v1.5.0: minimizing a live call without the overlay permission asks for
+    // it once, so the floating call window can appear over other apps.
+    val needCallOverlay by vm.needCallOverlayPermission.collectAsState()
+    LaunchedEffect(needCallOverlay) {
+        if (needCallOverlay) {
             runCatching {
                 overlayPerm.launch(
                     Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + ctx.packageName))
