@@ -15,6 +15,7 @@ import androidx.navigation.compose.rememberNavController
 import com.badshah222.rani.ai.features.about.AboutScreen
 import com.badshah222.rani.ai.features.camera.CameraViewScreen
 import com.badshah222.rani.ai.features.camera.CameraViewModel
+import com.badshah222.rani.ai.features.controls.ControlsScreen
 import com.badshah222.rani.ai.features.contacts.ContactsScreen
 import com.badshah222.rani.ai.features.contacts.ContactsViewModel
 import com.badshah222.rani.ai.features.automation.AutomationScreen
@@ -112,6 +113,7 @@ private fun SignedInNav(session: SessionViewModel) {
         Box(Modifier.padding(pad)) {
             NavHost(nav, startDestination = "home") {
                 composable("home") { HomeScreen(session, home, world, memory, visualhub) { nav.navigate(it) } }
+                composable("controls") { ControlsScreen(home, { nav.popBackStack() }) { nav.navigate(it) } }
                 composable("chat") { ChatScreen(home, { nav.popBackStack() }, { nav.navigate("voice") }) }
                 composable("voice") { VoiceScreen(home) { nav.popBackStack() } }
                 composable("quick") { QuickActionsScreen(home, { nav.popBackStack() }, { nav.navigate(it) }) }

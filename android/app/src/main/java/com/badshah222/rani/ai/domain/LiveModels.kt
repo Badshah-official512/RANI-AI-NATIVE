@@ -1,20 +1,23 @@
 package com.badshah222.rani.ai.domain
 
 /**
- * MYRA Live voice models — ported 1:1 from aria.py LIVE_MODELS (MYRA Ultra).
+ * Gemini Live voice models — verified against Google's Live API docs (July 2026).
  * key -> (UI label, model id, API version/endpoint).
- * Default key is "3.1" (Gemini 3.1 Flash Live), exactly as MYRA ships it.
- * The engine tries the selected model first, then the next MYRA model in
- * this order if the server rejects the setup.
+ * Default key is "3.1" (Gemini 3.1 Flash Live) — the current flagship Live model.
+ * All models use v1beta (the Live API endpoint). Two old entries were removed:
+ * "gemini-3.8-live" never existed, and "gemini-2.5-flash-native-audio-latest"
+ * was retired from the model catalog — replaced by the GA native-audio model.
+ * The engine tries the selected model first, then the next model in this order
+ * if the server rejects the setup.
  */
 data class LiveModel(val key: String, val label: String, val modelId: String, val version: String)
 
 object LiveModels {
     val all = listOf(
         LiveModel("3.1", "Gemini 3.1 Flash Live (Default)", "gemini-3.1-flash-live-preview", "v1beta"),
-        LiveModel("native", "2.5 Flash Native Audio", "gemini-2.5-flash-native-audio-latest", "v1alpha"),
-        LiveModel("native-dec", "2.5 Native Audio (Dec 2025 Preview)", "gemini-2.5-flash-native-audio-preview-12-2025", "v1alpha"),
-        LiveModel("3.8", "Gemini 3.8 Live", "gemini-3.8-live", "v1beta"),
+        LiveModel("native-dec", "2.5 Native Audio (Dec 2025 Preview)", "gemini-2.5-flash-native-audio-preview-12-2025", "v1beta"),
+        LiveModel("native-ga", "2.5 Flash Native Audio (GA)", "gemini-live-2.5-flash-native-audio", "v1beta"),
+        LiveModel("2.0", "Gemini 2.0 Flash Live", "gemini-2.0-flash-live-001", "v1beta"),
     )
     const val DEFAULT_KEY = "3.1"
     fun fromKey(key: String?): LiveModel = all.firstOrNull { it.key == key } ?: all.first()

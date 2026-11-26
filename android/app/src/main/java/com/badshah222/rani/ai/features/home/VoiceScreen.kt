@@ -63,6 +63,7 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     val liveState by vm.live.state.collectAsState(); val liveLevel by vm.live.level.collectAsState()
     val liveUser by vm.live.userText.collectAsState(); val liveAssistant by vm.live.assistantText.collectAsState()
     val liveError by vm.live.error.collectAsState(); val muted by vm.live.muted.collectAsState()
+    val attemptInfo by vm.live.attemptInfo.collectAsState(); val liveLastError by vm.live.lastError.collectAsState()
     val fallback by vm.liveFallback.collectAsState()
     val emotion by vm.emotion.collectAsState()
     val inCall by vm.inCall.collectAsState(); val callMuted by vm.callMuted.collectAsState()
@@ -198,6 +199,24 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
                 if (liveMode) "Real voice · Gemini Live" else "Classic voice mode",
                 Modifier.fillMaxWidth().padding(top = 4.dp), textAlign = TextAlign.Center, color = Mute, style = MaterialTheme.typography.bodySmall,
             )
+            // While connecting, show exactly which model is being tried — and the
+            // real reason the last try failed — so a stuck call never looks silent.
+            if (liveMode && liveState == LiveSession.State.Connecting) {
+                if (attemptInfo.isNotEmpty()) Text(attemptInfo, Modifier.fillMaxWidth().padding(top = 8.dp), textAlign = TextAlign.Center, color = Mute, style = MaterialTheme.typography.bodySmall)
+                liveLastError?.let { Text("Last try: $it", Modifier.fillMaxWidth().padding(top = 4.dp), textAlign = TextAlign.Center, color = Bad, style = MaterialTheme.typography.bodySmall, maxLines = 2) }
+            }
+            // The emotion she is speaking in right now — visible on the call.
+            Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.clip(RoundedCornerShape(50)).background(Panel.copy(alpha = 0.85f))
+                        .border(1.dp, emotion.composeColor.copy(alpha = 0.55f), RoundedCornerShape(50))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(emotion.composeColor))
+                    Text("Emotion · ${emotion.label}", style = MaterialTheme.typography.labelMedium, color = emotion.composeColor)
+                }
+            }
             // Live equalizer — bars dance with the voice level while talking/listening.
             if (orbState == CharState.Speaking || orbState == CharState.Listening) {
                 Row(Modifier.fillMaxWidth().padding(top = 14.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {

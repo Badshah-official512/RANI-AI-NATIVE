@@ -32,8 +32,9 @@ fun rememberRgbColor(durationMs: Int = 6000): Color {
 }
 
 /**
- * A soft blue / red / green light wash across a whole screen surface, breathing slowly.
- * Draw this behind a screen's content (inside a Box) for the ambient RGB lighting.
+ * An energetic lime / blue / red / green light wash across a whole screen
+ * surface, breathing slowly. Draw this behind a screen's content (inside a
+ * Box) for the ambient RGB lighting.
  */
 @Composable
 fun AmbientLights(modifier: Modifier = Modifier) {
@@ -46,10 +47,11 @@ fun AmbientLights(modifier: Modifier = Modifier) {
     Canvas(modifier) {
         val w = size.width
         val h = size.height
-        drawRect(Brush.radialGradient(listOf(Color(0xFF2563EB).copy(alpha = 0.20f * pulse), Color.Transparent), center = Offset(w * 0.08f, h * 0.05f), radius = w * 0.75f))
-        drawRect(Brush.radialGradient(listOf(Color(0xFFDC2626).copy(alpha = 0.15f * pulse), Color.Transparent), center = Offset(w * 0.95f, h * 0.30f), radius = w * 0.70f))
-        drawRect(Brush.radialGradient(listOf(Color(0xFF16A34A).copy(alpha = 0.14f * pulse), Color.Transparent), center = Offset(w * 0.15f, h * 0.95f), radius = w * 0.80f))
-        drawRect(Brush.radialGradient(listOf(Violet.copy(alpha = 0.13f * pulse), Color.Transparent), center = Offset(w * 0.90f, h * 0.92f), radius = w * 0.65f))
+        drawRect(Brush.radialGradient(listOf(EnergyBlue.copy(alpha = 0.24f * pulse), Color.Transparent), center = Offset(w * 0.08f, h * 0.05f), radius = w * 0.75f))
+        drawRect(Brush.radialGradient(listOf(Lime.copy(alpha = 0.20f * pulse), Color.Transparent), center = Offset(w * 0.92f, h * 0.08f), radius = w * 0.70f))
+        drawRect(Brush.radialGradient(listOf(EnergyRed.copy(alpha = 0.18f * pulse), Color.Transparent), center = Offset(w * 0.95f, h * 0.30f), radius = w * 0.70f))
+        drawRect(Brush.radialGradient(listOf(EnergyGreen.copy(alpha = 0.18f * pulse), Color.Transparent), center = Offset(w * 0.15f, h * 0.95f), radius = w * 0.80f))
+        drawRect(Brush.radialGradient(listOf(Violet.copy(alpha = 0.16f * pulse), Color.Transparent), center = Offset(w * 0.90f, h * 0.92f), radius = w * 0.65f))
     }
 }
 

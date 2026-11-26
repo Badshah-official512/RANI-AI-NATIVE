@@ -48,6 +48,10 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
     private val _userText = MutableStateFlow(""); val userText: StateFlow<String> = _userText
     private val _assistantText = MutableStateFlow(""); val assistantText: StateFlow<String> = _assistantText
     private val _error = MutableStateFlow<String?>(null); val error: StateFlow<String?> = _error
+    /** What the engine is trying right now ("Trying gemini-3.1-flash-live-preview · attempt 1 of 8") — shown on the call screen so a stuck call never looks silent. */
+    private val _attemptInfo = MutableStateFlow(""); val attemptInfo: StateFlow<String> = _attemptInfo
+    /** The last server/network reason a Live attempt failed — shown on the call screen and in Settings. */
+    private val _lastError = MutableStateFlow<String?>(null); val lastError: StateFlow<String?> = _lastError
     val muted = MutableStateFlow(false)
 
     /** Fired once per completed exchange with (user said, assistant said). */
@@ -107,7 +111,10 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
         // in MYRA's order as fallbacks. Each model is tried with the full
         // setup first, then a bare setup (native-audio models reject some fields).
         val selected = LiveModels.fromKey(store.liveModelKey)
-        val ordered = listOf(selected) + LiveModels.all.filter { it.key != selected.key }
+        // The model that worked last time connects first (fast connect), then the
+        // selected model, then the rest — every model in this list is real.
+        val lastWorking = store.liveModel?.let { LiveModels.fromModelId(it) }
+        val ordered = (listOfNotNull(lastWorking, selected) + LiveModels.all).distinctBy { it.key }
         attempts = ordered.flatMap { m ->
             listOf(Attempt(m.modelId, 0, m.version), Attempt(m.modelId, 3, m.version))
         }
@@ -116,6 +123,7 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
 
     /** A connect attempt failed before the session was ready: try the next attempt (model/setup variant), or give up with the real reason. */
     private fun nextOrFail(key: String, reason: String) {
+        _lastError.value = reason
         if (!running || setupDone || advancing) return
         advancing = true
         runCatching { ws?.close(1000, "retry") }
@@ -132,11 +140,12 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
         _state.value = State.Connecting
         setupDone = false
         // Watchdog: a hung handshake must never leave the screen on "Connecting…" forever.
+        _attemptInfo.value = "Trying ${att.model} · attempt ${attempt + 1} of ${attempts.size}"
         val tok = ++attemptToken
         thread(isDaemon = true) {
-            Thread.sleep(12000)
+            Thread.sleep(10000)
             if (running && !setupDone && tok == attemptToken) {
-                nextOrFail(key, "Live connection did not start in 12 seconds (model: ${att.model}). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.")
+                nextOrFail(key, "Live connection did not start in 10 seconds (model: ${att.model}). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.")
             }
         }
         val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${att.version}.GenerativeService.BidiGenerateContent?key=$key"
@@ -144,14 +153,16 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
             override fun onOpen(webSocket: WebSocket, response: Response) { sendSetup(att) }
             override fun onMessage(webSocket: WebSocket, text: String) { handleMessage(text) }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (!running) return
+                if (!running || tok != attemptToken) return
                 if (!setupDone) { nextOrFail(key, "Live connection fail ho gaya (model: ${att.model}): ${t.message?.take(90) ?: "network error"}"); return }
                 if (reconnects < 8) { reconnects++; Thread.sleep(minOf(600L * reconnects, 3000L)); if (running) connect(key, att) }
                 else fail("Live voice connection failed. Check your internet and try again.")
             }
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                if (!running) return
-                if (!setupDone && code != 1000) { nextOrFail(key, "Live band ho gaya (model: ${att.model}, code $code ${reason.take(60)})"); return }
+                if (!running || tok != attemptToken) return
+                // Any close before the session is ready is a failed attempt — move on at
+                // once instead of waiting for the watchdog (a 1000 close used to hang here).
+                if (!setupDone) { nextOrFail(key, "Live band ho gaya (model: ${att.model}, code $code ${reason.take(60)})"); return }
                 if (setupDone && reconnects < 8 && code != 1008) { reconnects++; if (running) connect(key, att) }
                 else if (code == 1008 || code == 1007) fail("The live voice was refused for this key or model. Open Settings → Live Voice and press Test to pick a working model.")
             }
@@ -339,12 +350,15 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
         runCatching { track?.stop() }; runCatching { track?.release() }; track = null
         ws?.close(1000, "user ended"); ws = null
         _level.value = 0f
+        _attemptInfo.value = ""
         if (_state.value != State.Error) _state.value = State.Idle
         setCommMode(false)
     }
 
     private fun fail(message: String) {
         _error.value = message
+        _lastError.value = message
+        _attemptInfo.value = ""
         _state.value = State.Error
         val wasRunning = running
         stop()

@@ -153,6 +153,20 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- Controls screen toggles (every switch, one by one) ----
+    val liveOn = MutableStateFlow(c.store.liveEnabled)
+    fun setLive(v: Boolean) { c.store.liveEnabled = v; liveOn.value = v }
+    val screenRecordingOn = MutableStateFlow(c.store.screenRecordingEnabled)
+    fun setScreenRecording(v: Boolean) { c.store.screenRecordingEnabled = v; screenRecordingOn.value = v }
+    val voicePrintGateOn = MutableStateFlow(c.store.voicePrintGate)
+    fun setVoicePrintGate(v: Boolean) { c.store.voicePrintGate = v; voicePrintGateOn.value = v }
+    val faceLockOn = MutableStateFlow(c.store.faceLockEnabled)
+    fun setFaceLock(v: Boolean) { c.store.faceLockEnabled = v; faceLockOn.value = v }
+    val guardianOn = MutableStateFlow(c.store.guardianEnabled)
+    fun setGuardian(v: Boolean) { c.store.guardianEnabled = v; guardianOn.value = v }
+    val speakOn = MutableStateFlow(c.store.speakReplies)
+    fun setSpeakReplies(v: Boolean) { c.store.speakReplies = v; speakOn.value = v }
+
     /**
      * Voice-print gate (a RANI extra beyond Stonic): when the gate is ON and a
      * voice-print is enrolled, a voice session starts only for a verified boss
@@ -190,7 +204,15 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     fun startLiveSession() {
         liveFallback.value = null
         viewModelScope.launch {
-            if (c.store.liveModel == null) c.ai.detectLiveModel()
+            // Fail fast: if this key offers no Live voice model at all, do not burn
+            // the whole model ladder on "Connecting…" — say so at once.
+            if (c.store.liveModel == null) {
+                val found = c.ai.detectLiveModel()
+                if (found == null) {
+                    liveFallback.value = "Live voice could not be confirmed for this Gemini key. Check the internet, then open Settings → Live Voice → Test Live voice and pick a working model."
+                    return@launch
+                }
+            }
             val emo = c.store.emotionId?.let { Emotions.fromId(it) } ?: emotion.value
             // The panel's call greeting opens the Live call (voice-only, never on screen).
             val greeting = c.remoteConfig.callGreeting()
@@ -533,6 +555,7 @@ fun HomeScreen(
     }
 
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Ink, Panel, Ink)))) {
+        AmbientLights(Modifier.fillMaxSize())
         Column(
             Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp),
@@ -704,6 +727,7 @@ fun HomeScreen(
                 val cards = listOf(
                     Triple(Icons.Default.Chat, "Chat", "Get instant answers") to "chat",
                     Triple(Icons.Default.Call, "Voice Call", "Talk to RANI") to "voice",
+                    Triple(Icons.Default.Tune, "Controls", "Every switch, one by one") to "controls",
                     Triple(Icons.Default.Videocam, "Camera View", "See what RANI sees") to "camera",
                     Triple(Icons.Default.AutoAwesome, "Visual Hub", "Draw & explain") to "visualhub",
                     Triple(Icons.Default.Public, "Your World", "Daily briefing") to "world",
