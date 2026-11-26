@@ -86,7 +86,7 @@ class WorkerApi(private val tokenProvider: (suspend () -> String?)? = null) {
      *  pool has no key — the caller then uses the user's own Gemini key. */
     suspend fun liveKey(): String? {
         val token = tokenProvider?.invoke() ?: return null
-        val body = withTimeoutOrNull(12_000) { get("$BASE_URL/api/live-key", token) } ?: return null
+        val body = withTimeoutOrNull(9_000) { get("$BASE_URL/api/live-key", token) } ?: return null
         return runCatching { JSONObject(body).optString("key").takeIf { it.isNotBlank() } }.getOrNull()
     }
 
@@ -138,12 +138,22 @@ class WorkerApi(private val tokenProvider: (suspend () -> String?)? = null) {
         }.getOrNull()
     }
 
-    /** One status poll for a video job. Returns the raw JSON object, or null
-     *  on a network/server error. While running it looks like {"done":false};
-     *  when finished, "done" is true and the video is in one of several fields. */
-    suspend fun videoStatus(name: String): JSONObject? {
-        val body = withTimeoutOrNull(30_000) { get("$BASE_URL/api/video?name=${enc(name)}") } ?: return null
-        return runCatching { JSONObject(body) }.getOrNull()
+    /** One poll of a video job. `status` is the JSON status (NovAI/Agnes/Agent/
+     *  Gemini: {"done":false} while running, {"done":true,"url":...} when done).
+     *  `videoBytes` is set when the provider answers the poll with the finished
+     *  video itself — Pollinations returns raw MP4 bytes, not JSON. Without this
+     *  the poller saw "not JSON" forever and the video timed out after 7 minutes
+     *  even though it was done. */
+    data class VideoPoll(val status: JSONObject?, val videoBytes: ByteArray?)
+    suspend fun videoPoll(name: String): VideoPoll {
+        val bytes = withTimeoutOrNull(30_000) { downloadBytes("$BASE_URL/api/video?name=${enc(name)}") } ?: return VideoPoll(null, null)
+        // MP4 files start with a 4-byte box size followed by "ftyp" — a raw video,
+        // not a JSON status (Pollinations answers the poll with the finished MP4).
+        if (bytes.size > 8 && bytes[4] == 'f'.code.toByte() && bytes[5] == 't'.code.toByte() && bytes[6] == 'y'.code.toByte() && bytes[7] == 'p'.code.toByte()) {
+            return VideoPoll(null, bytes)
+        }
+        val status = runCatching { JSONObject(String(bytes, Charsets.UTF_8)) }.getOrNull()
+        return VideoPoll(status, null)
     }
 
     /** Extracts the finished video from a done status object. Handles the

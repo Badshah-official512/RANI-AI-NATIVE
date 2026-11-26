@@ -227,7 +227,15 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
         // Poll until done (video takes a few minutes).
         repeat(28) {
             delay(15_000)
-            val status = runCatching { w.videoStatus(name) }.getOrNull() ?: return@repeat
+            val poll = runCatching { w.videoPoll(name) }.getOrNull() ?: return@repeat
+            // Pollinations answers the poll with the finished MP4 itself (raw bytes).
+            poll.videoBytes?.let { bytes ->
+                if (bytes.isNotEmpty()) {
+                    cloud.recordUsage("gemini", WorkerApi.VIDEO_MODEL, "video", true, 0, 0, (System.currentTimeMillis() - t0).toInt(), null)
+                    return bytes
+                }
+            }
+            val status = poll.status ?: return@repeat
             if (status.optBoolean("done")) {
                 val bytes = w.videoBytes(status)
                 if (bytes != null && bytes.isNotEmpty()) {
@@ -260,7 +268,7 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
                 systemPrompt("Speak warmly and heartily, like a close friend who is genuinely glad to talk.")))))
             .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray()
                 .put(JSONObject().put("text", prompt))
-                .put(JSONObject().put("inline_data", JSONObject().put("mime_type", mimeType).put("data", imageBase64))))))
+                .put(JSONObject().put("inlineData", JSONObject().put("mimeType", mimeType).put("data", imageBase64))))))
         val req = Request.Builder()
             .url("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
             .header("x-goog-api-key", key).header("Content-Type", "application/json")

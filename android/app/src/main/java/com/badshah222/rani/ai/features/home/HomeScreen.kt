@@ -195,9 +195,6 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     fun requestCall() {
         viewModelScope.launch { if (voiceGateOk()) { beginCall(); startListening() } }
     }
-    fun requestLive() {
-        viewModelScope.launch { if (voiceGateOk()) startLiveSession() }
-    }
 
     // ---- Gemini Live via the BADSHAH-style web page (v1.3.2) ----
     /** The RANI Live page URL for the in-app WebView call — null when no web call is active. */
@@ -235,7 +232,17 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     // ---- Gemini Live (real human voice) ----
     val live = c.live
     val liveFallback = MutableStateFlow<String?>(null)
-    fun liveAvailable(): Boolean = c.store.liveEnabled && c.store.apiKey(Provider.GEMINI) != null
+    /** Live is available when enabled AND there is any key source: the user's own
+     *  Gemini key, OR a Firebase sign-in (the pooled key via /api/live-key —
+     *  BADSHAH's way: a BADSHAH AI account signs into RANI and needs no own key).
+     *  Requiring only the own key here blocked the pooled-key call for signed-in
+     *  users — the WebView path (requestLiveWeb) already handles pooled-first. */
+    fun liveAvailable(): Boolean = c.store.liveEnabled && (c.store.apiKey(Provider.GEMINI) != null || c.auth.current != null)
+    /** Native LiveSession entry — the FALLBACK engine only (the WebView call is
+     *  primary; classic mode is the user-visible fallback). Not wired to the call
+     *  screen: the native socket engines hung on this phone, so the call screen
+     *  uses the WebView and falls back to classic. Kept for the Settings Live
+     *  test path and for a future engine swap. */
     fun startLiveSession() {
         liveFallback.value = null
         viewModelScope.launch {

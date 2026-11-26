@@ -76,7 +76,14 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
         RaniLiveWebView(
             url = liveWebUrl!!,
             onCallEnded = { vm.stopLiveWeb(); onBack() },
-            onLoadError = { /* page failed to load — the page's own error state shows; call stays in-app */ }
+            // BADSHAH's MainActivity falls back on a page-load error; RANI falls
+            // back to classic mode — a page that never loads is no call at all,
+            // so there is nothing to keep the user on. (v1.3.2 left this a no-op
+            // and a failed load stranded the user on a blank/error WebView.)
+            onLoadError = {
+                vm.stopLiveWeb()
+                vm.liveFallback.value = "The RANI Live page could not load — check the internet and try the call again."
+            }
         )
         return
     }
