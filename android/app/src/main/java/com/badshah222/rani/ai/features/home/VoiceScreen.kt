@@ -65,22 +65,29 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     val liveError by vm.live.error.collectAsState(); val muted by vm.live.muted.collectAsState()
     val attemptInfo by vm.live.attemptInfo.collectAsState(); val liveLastError by vm.live.lastError.collectAsState()
     val fallback by vm.liveFallback.collectAsState()
-    val chromeOpened by vm.liveChromeOpened.collectAsState()
+    val liveWebUrl by vm.liveWebUrl.collectAsState()
     val emotion by vm.emotion.collectAsState()
     val inCall by vm.inCall.collectAsState(); val callMuted by vm.callMuted.collectAsState()
 
-    // v1.3.1 — BADSHAH-style call: the Live page opens in Chrome (the browser's
-    // WebSocket works on this phone; v1.3.0's in-app WebView stayed blank).
-    // Once Chrome opens, close this screen so Back from Chrome lands on Home.
-    LaunchedEffect(chromeOpened) { if (chromeOpened) onBack() }
+    // v1.3.2 — BADSHAH-style call, INSIDE the app: when the web Live URL is set,
+    // the call runs in the app's own WebView (the RANI Live page), exactly like
+    // BADSHAH AI's WebView. Chrome never opens. The page IS the call screen.
+    if (liveWebUrl != null) {
+        RaniLiveWebView(
+            url = liveWebUrl!!,
+            onCallEnded = { vm.stopLiveWeb(); onBack() },
+            onLoadError = { /* page failed to load — the page's own error state shows; call stays in-app */ }
+        )
+        return
+    }
 
     var liveMode by remember { mutableStateOf(vm.liveAvailable()) }
     var started by remember { mutableStateOf(false) }
 
     fun begin() {
         if (started) return; started = true
-        // v1.3.1: Live goes through Chrome (browser WebSocket). The native
-        // LiveSession stays only as the Settings-test / fallback engine.
+        // v1.3.2: Live goes through the in-app WebView (browser WebSocket). The
+        // native LiveSession stays only as the Settings-test / fallback engine.
         if (liveMode) vm.requestLiveWeb() else vm.requestCall()
     }
     val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
