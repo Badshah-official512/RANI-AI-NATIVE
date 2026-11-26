@@ -199,17 +199,18 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { if (voiceGateOk()) startLiveSession() }
     }
 
-    // ---- Gemini Live via the BADSHAH-style web page (v1.3.0) ----
-    /** The RANI Live page URL for the WebView call — null when no web call is active. */
-    val liveWebUrl = MutableStateFlow<String?>(null)
+    // ---- Gemini Live via the BADSHAH-style web page (v1.3.1) ----
+    /** True once the Live call was opened in Chrome (so VoiceScreen can close). */
+    val liveChromeOpened = MutableStateFlow(false)
     /** Start the Live call on the browser's WebSocket (BADSHAH's way). Resolves
      *  the key exactly like LiveSession does (pooled first, own key fallback),
-     *  then hands the WebView a page that opens a plain `new WebSocket` to
-     *  Google Live. The native socket engines (OkHttp, Java-WebSocket) hang
-     *  silently on this phone; the browser's engine works (BADSHAH AI proves it).
+     *  then opens the RANI Live page in Chrome — the browser's engine, which
+     *  works on this phone (BADSHAH AI proves it). v1.3.0's in-app WebView
+     *  stayed blank white on this phone, so the call now rides Chrome itself.
      *  Boss's order: ONLY gemini-3.8-live, one request. */
     fun requestLiveWeb() {
         liveFallback.value = null
+        liveChromeOpened.value = false
         viewModelScope.launch {
             val pooled = runCatching { withTimeoutOrNull(9_000) { c.worker?.liveKey() } }.getOrNull()
             val key = pooled ?: c.store.apiKey(Provider.GEMINI)
@@ -225,10 +226,25 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 "&voice=" + URLEncoder.encode(voice, "UTF-8") +
                 "&model=" + URLEncoder.encode(model, "UTF-8") +
                 "&v=" + URLEncoder.encode(v, "UTF-8")
-            liveWebUrl.value = url
+            openLiveInChrome(url)
+            liveChromeOpened.value = true
         }
     }
-    fun stopLiveWeb() { liveWebUrl.value = null }
+    /** Open a URL in Chrome (proven on this phone for BADSHAH AI); fall back
+     *  to any browser if Chrome is not installed. */
+    private fun openLiveInChrome(url: String) {
+        val ctx = getApplication<Application>()
+        val uri = Uri.parse(url)
+        val chrome = Intent(Intent.ACTION_VIEW, uri).apply {
+            setPackage("com.android.chrome")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        runCatching { ctx.startActivity(chrome) }.onFailure {
+            val any = Intent(Intent.ACTION_VIEW, uri).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            runCatching { ctx.startActivity(any) }
+        }
+    }
+    fun stopLiveWeb() { /* WebView path removed in v1.3.1 — call lives in Chrome */ }
 
     // ---- Gemini Live (real human voice) ----
     val live = c.live

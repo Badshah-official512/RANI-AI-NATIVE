@@ -65,24 +65,21 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     val liveError by vm.live.error.collectAsState(); val muted by vm.live.muted.collectAsState()
     val attemptInfo by vm.live.attemptInfo.collectAsState(); val liveLastError by vm.live.lastError.collectAsState()
     val fallback by vm.liveFallback.collectAsState()
-    val liveWebUrl by vm.liveWebUrl.collectAsState()
+    val chromeOpened by vm.liveChromeOpened.collectAsState()
     val emotion by vm.emotion.collectAsState()
     val inCall by vm.inCall.collectAsState(); val callMuted by vm.callMuted.collectAsState()
 
-    // v1.3.0 — BADSHAH-style call: when the web Live URL is set, the call runs
-    // in the browser's WebSocket (the RANI Live page) instead of the native
-    // socket engines that hang on this phone. The page IS the call screen.
-    if (liveWebUrl != null) {
-        RaniLiveWebView(url = liveWebUrl!!) { vm.stopLiveWeb(); onBack() }
-        return
-    }
+    // v1.3.1 — BADSHAH-style call: the Live page opens in Chrome (the browser's
+    // WebSocket works on this phone; v1.3.0's in-app WebView stayed blank).
+    // Once Chrome opens, close this screen so Back from Chrome lands on Home.
+    LaunchedEffect(chromeOpened) { if (chromeOpened) onBack() }
 
     var liveMode by remember { mutableStateOf(vm.liveAvailable()) }
     var started by remember { mutableStateOf(false) }
 
     fun begin() {
         if (started) return; started = true
-        // v1.3.0: Live goes through the web page (browser WebSocket). The native
+        // v1.3.1: Live goes through Chrome (browser WebSocket). The native
         // LiveSession stays only as the Settings-test / fallback engine.
         if (liveMode) vm.requestLiveWeb() else vm.requestCall()
     }
