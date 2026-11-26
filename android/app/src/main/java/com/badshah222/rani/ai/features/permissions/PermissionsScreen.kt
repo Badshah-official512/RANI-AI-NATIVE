@@ -1,10 +1,13 @@
 package com.badshah222.rani.ai.features.permissions
 
 import android.Manifest
+import android.app.AlarmManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,7 +28,7 @@ import com.badshah222.rani.ai.core.RaniAccessibilityService
 import com.badshah222.rani.ai.features.settings.TopBar
 import com.badshah222.rani.ai.ui.theme.*
 
-private data class Perm(val permission: String, val title: String, val why: String, val minSdk: Int = 1)
+private data class Perm(val permission: String, val title: String, val why: String, val minSdk: Int = 1, val maxSdk: Int = Int.MAX_VALUE)
 
 /** One row per runtime permission in the manifest (spec §5). */
 private val PERMS = listOf(
@@ -37,7 +40,9 @@ private val PERMS = listOf(
     Perm(Manifest.permission.READ_MEDIA_IMAGES, "Photos", "Share photos with RANI (vision) and save the images she makes.", Build.VERSION_CODES.TIRAMISU),
     Perm(Manifest.permission.READ_MEDIA_VIDEO, "Videos", "Share videos with RANI.", Build.VERSION_CODES.TIRAMISU),
     Perm(Manifest.permission.READ_MEDIA_AUDIO, "Audio files", "Share audio with RANI.", Build.VERSION_CODES.TIRAMISU),
+    Perm(Manifest.permission.READ_EXTERNAL_STORAGE, "Storage (Android 12 and below)", "Read photos and files on older Android versions.", 1, Build.VERSION_CODES.S_V2),
     Perm(Manifest.permission.BLUETOOTH_CONNECT, "Bluetooth", "Bluetooth headset on calls.", Build.VERSION_CODES.S),
+    Perm(Manifest.permission.BLUETOOTH, "Bluetooth (Android 11 and below)", "Bluetooth headset on calls, on older Android versions.", 1, Build.VERSION_CODES.R),
     Perm(Manifest.permission.READ_CALENDAR, "Calendar", "Reminders and special days (birthdays, anniversaries)."),
     Perm(Manifest.permission.WRITE_CALENDAR, "Calendar (write)", "Save reminders and special days to your calendar."),
     Perm(Manifest.permission.POST_NOTIFICATIONS, "Notifications", "Tells you when support replies, announcements or reminders arrive.", Build.VERSION_CODES.TIRAMISU),
@@ -59,14 +64,8 @@ fun PermissionsScreen(onBack: () -> Unit) {
                     Modifier.padding(4.dp), color = Mute, style = MaterialTheme.typography.bodySmall,
                 )
             }
-            items(PERMS.filter { Build.VERSION.SDK_INT >= it.minSdk }) { p ->
-                val granted = tick >= 0 && ContextCompat.checkSelfPermission(ctx, p.permission) == PackageManager.PERMISSION_GRANTED
-                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text(p.title, style = MaterialTheme.typography.titleMedium); Text(p.why, style = MaterialTheme.typography.bodySmall, color = Mute) }
-                    if (granted) Text("Allowed ✓", color = Ok) else Button({ launcher.launch(p.permission) }) { Text("Allow") }
-                } }
-            }
-            item { Text("System settings — aap khud ON karte hain", style = MaterialTheme.typography.titleMedium, color = Gold, modifier = Modifier.padding(top = 8.dp)) }
+            // ---- Phone control — every permission the full control needs, one by one ----
+            item { Text("Phone control — you turn these on yourself", style = MaterialTheme.typography.titleMedium, color = Gold, modifier = Modifier.padding(top = 8.dp)) }
             item {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel)) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -87,11 +86,39 @@ fun PermissionsScreen(onBack: () -> Unit) {
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("Battery — unrestricted", style = MaterialTheme.typography.titleMedium)
-                            Text("Calls background mein band na hon — battery optimization se bahar rakho.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                            Text("Exact alarms", style = MaterialTheme.typography.titleMedium)
+                            Text("Reminders and automations fire exactly on time.", style = MaterialTheme.typography.bodySmall, color = Mute)
                         }
-                        Button({ ctx.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }) { Text("Open") }
+                        val alarmsOk = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                            (ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager).canScheduleExactAlarms()
+                        if (tick >= 0 && alarmsOk) Text("ON ✓", color = Ok)
+                        else Button({ ctx.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:" + ctx.packageName))) }) { Text("Open") }
                     }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Battery — unrestricted", style = MaterialTheme.typography.titleMedium)
+                            Text("So calls keep working in the background — keep RANI out of battery optimization.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                        }
+                        val batteryOk = (ctx.getSystemService(Context.POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(ctx.packageName)
+                        if (tick >= 0 && batteryOk) Text("ON ✓", color = Ok)
+                        else Button({ ctx.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + ctx.packageName))) }) { Text("Open") }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Modify system settings", style = MaterialTheme.typography.titleMedium)
+                            Text("Automations change brightness and system settings for you.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                        }
+                        if (tick >= 0 && Settings.System.canWrite(ctx)) Text("ON ✓", color = Ok)
+                        else Button({ ctx.startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:" + ctx.packageName))) }) { Text("Open") }
+                    }
+                } }
+            }
+            item { Text("App permissions", style = MaterialTheme.typography.titleMedium, color = Gold, modifier = Modifier.padding(top = 8.dp)) }
+            items(PERMS.filter { Build.VERSION.SDK_INT >= it.minSdk && Build.VERSION.SDK_INT <= it.maxSdk }) { p ->
+                val granted = tick >= 0 && ContextCompat.checkSelfPermission(ctx, p.permission) == PackageManager.PERMISSION_GRANTED
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel)) { Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) { Text(p.title, style = MaterialTheme.typography.titleMedium); Text(p.why, style = MaterialTheme.typography.bodySmall, color = Mute) }
+                    if (granted) Text("Allowed ✓", color = Ok) else Button({ launcher.launch(p.permission) }) { Text("Allow") }
                 } }
             }
             item { OutlinedButton({ ctx.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}"))) }) { Text("Open Android app settings") } }
