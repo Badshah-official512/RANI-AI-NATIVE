@@ -77,11 +77,13 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
      *  while the browser's WebSocket works fine on the same phone and key. The
      *  phone CAN reach the BADSHAH Worker reliably, and the Worker (Cloudflare
      *  edge) CAN reach Google Live — verified end-to-end 2026-11-26 (setupComplete
-     *  in 0.2 s, RANI spoke). So attempt #1 is always the Worker proxy
+     *  in 0.2 s, RANI spoke). So the call goes through the Worker proxy
      *  (wss://badshah222-ai.pages.dev/api/live, key in ?key=, browser-identical
      *  handshake — v1.2.1, after v1.2.0's X-Gemini-Key header was also dropped
-     *  silently by the phone's path);
-     *  the direct ladder below is the fallback if the proxy ever fails. */
+     *  silently by the phone's path).
+     *  SINGLE ATTEMPT (2026-11-26, v1.2.2 — boss's order): ONLY gemini-3.8-live,
+     *  ONE request. The 10-attempt ladder is gone — no other models, no direct
+     *  fallback. If the one attempt fails, the error shows at once. */
     private data class Attempt(val model: String, val level: Int, val version: String, val proxy: Boolean = false)
     private var attempts: List<Attempt> = emptyList()
     @Volatile private var attempt = 0
@@ -141,23 +143,20 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
             // The user may have ended the call while the key was being fetched.
             if (!running) { setCommMode(false); return@thread }
             sessionKey = key
-            // Live models: the selected model first
-            // (default "3.8" — Gemini 3.8 Live, GA since 15 Sep 2026), then the other
-            // models in order as fallbacks. Each model is tried BADSHAH's way first
-            // (?key= + full setup), then the SDK's way (header + full setup), then
-            // bare (header + minimal setup) — every model in this list is real.
-            val selected = LiveModels.fromKey(store.liveModelKey)
-            // The model that worked last time connects first (fast connect), then the
-            // selected model, then the rest — every model in this list is real.
-            val lastWorking = store.liveModel?.let { LiveModels.fromModelId(it) }
-            val ordered = (listOfNotNull(lastWorking, selected) + LiveModels.all).distinctBy { it.key }
-            // Attempt #1 is ALWAYS the Worker proxy (see Attempt doc) — the phone
-            // reaches Cloudflare reliably, Cloudflare reaches Google Live. The
-            // direct ladder below is only the fallback if the proxy ever fails.
-            attempts = listOf(Attempt(selected.modelId, 0, selected.version, proxy = true)) +
-                ordered.flatMap { m ->
-                    listOf(Attempt(m.modelId, 0, m.version), Attempt(m.modelId, 1, m.version), Attempt(m.modelId, 3, m.version))
-                }
+            // v1.2.2 — BOSS'S ORDER (2026-11-26 20:17 PKT): ONLY gemini-3.8-live,
+            // ONE request, no ladder, no other models. The ladder (10 attempts
+            // across 3 models) wasted up to 2.5 minutes on models the key does
+            // not even offer (2.5 GA is not on his key; extended-thinking needs
+            // thinkingLevel HIGH) while the call never connected. 3.8-live is
+            // the default, the key offers it (Settings: "Live ready — Gemini
+            // 3.8 Live (Default) is available"), and it is Google's recommended
+            // Live model. So there is exactly ONE attempt: 3.8-live via the
+            // Worker proxy (browser-identical handshake, ?key=) — the path
+            // verified end-to-end (setupComplete in 0.2 s, RANI spoke). If it
+            // fails, the error shows at once and the call ends; the boss taps
+            // call again to retry. No silent cycling through dead models.
+            val model38 = LiveModels.fromKey(LiveModels.DEFAULT_KEY)
+            attempts = listOf(Attempt(model38.modelId, 0, model38.version, proxy = true))
             connect(key, attempts[0])
         }
     }
