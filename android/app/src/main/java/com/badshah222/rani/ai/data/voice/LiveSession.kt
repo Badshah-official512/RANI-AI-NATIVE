@@ -149,8 +149,17 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
                 nextOrFail(key, "Live connection did not start in 15 seconds (model: ${att.model}). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.")
             }
         }
-        val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${att.version}.GenerativeService.BidiGenerateContent?key=$key"
-        ws = client.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
+        val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${att.version}.GenerativeService.BidiGenerateContent"
+        // Auth goes in the x-goog-api-key HEADER — exactly as Google's official
+        // google-genai SDK sends it (verified live 2026-11-26: setupComplete in
+        // 1.4 s). With ?key= in the URL the server accepts the socket but NEVER
+        // completes the session for gemini-3.8-live (silent 60 s+, both keys,
+        // every setup shape) — that is why the call never connected.
+        ws = client.newWebSocket(Request.Builder().url(url)
+            .addHeader("x-goog-api-key", key)
+            .addHeader("Content-Type", "application/json")
+            .addHeader("User-Agent", "RANI-AI-GF/1.0 (Android)")
+            .build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) { sendSetup(att) }
             override fun onMessage(webSocket: WebSocket, text: String) { handleMessage(text) }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -173,44 +182,46 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
     private fun sendSetup(att: Attempt) {
         val voice = store.liveVoiceName
         if (att.level == 0) {
-            // MYRA-style setup (the shape the open-source MYRA app connects with):
-            // context-window compression + session resumption keep long calls alive,
-            // snake_case generation/speech config, and NO languageCode anywhere —
-            // native-audio models choose the language themselves and reject it.
-            val resumption = JSONObject()
-            resumeHandle?.let { resumption.put("handle", it) }
+            // The official google-genai SDK's EXACT working setup (verified live
+            // 2026-11-26: setupComplete in 1.4 s, RANI spoke first). Note the
+            // mixed casing — camelCase at the top, snake_case inside speechConfig —
+            // and role:"user" on the system instruction. No contextWindowCompression
+            // and no sessionResumption unless resuming (the SDK omits both).
+            // The extended-thinking model REQUIRES thinkingLevel HIGH (the server
+            // closes 1007 without it); plain 3.8-live REJECTS it (1007 the other way).
             val gen = JSONObject()
-                .put("temperature", 0.7)
-                .put("response_modalities", JSONArray().put("AUDIO"))
-                .put("speech_config", JSONObject().put("voice_config",
+                .put("responseModalities", JSONArray().put("AUDIO"))
+                .put("speechConfig", JSONObject().put("voice_config",
                     JSONObject().put("prebuilt_voice_config", JSONObject().put("voice_name", voice))))
+            if (LiveModels.fromModelId(att.model)?.thinking == true) {
+                gen.put("thinkingConfig", JSONObject().put("thinkingLevel", "HIGH"))
+            }
+            val sys = JSONObject()
+                .put("parts", JSONArray().put(JSONObject().put("text", systemInstruction)))
+                .put("role", "user")
             val setup = JSONObject()
-                .put("contextWindowCompression", JSONObject().put("slidingWindow", JSONObject()))
-                .put("sessionResumption", resumption)
+                .put("model", "models/${att.model}")
+                .put("generationConfig", gen)
+                .put("systemInstruction", sys)
                 .put("inputAudioTranscription", JSONObject())
                 .put("outputAudioTranscription", JSONObject())
-                .put("model", "models/${att.model}")
-                .put("generation_config", gen)
-                .put("system_instruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemInstruction))))
+            // Resume only when we actually hold a handle (the SDK omits the field otherwise).
+            resumeHandle?.let { setup.put("sessionResumption", JSONObject().put("handle", it)) }
             ws?.send(JSONObject().put("setup", setup).toString())
             return
         }
-        // Backup variants (camelCase): 1 = full with languageCode, 2 = no languageCode,
-        // 3 = bare (no languageCode, no transcription requests).
-        val speech = JSONObject()
-            .put("voiceConfig", JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice)))
-        if (att.level == 1) speech.put("languageCode", store.language)
+        // Backup variant (level 3 = bare SDK shape, no system instruction): only used
+        // if the full setup is ever rejected, so the ladder still has somewhere to go.
         val gen = JSONObject()
             .put("responseModalities", JSONArray().put("AUDIO"))
-            .put("speechConfig", speech)
+            .put("speechConfig", JSONObject().put("voice_config",
+                JSONObject().put("prebuilt_voice_config", JSONObject().put("voice_name", voice))))
+        if (LiveModels.fromModelId(att.model)?.thinking == true) {
+            gen.put("thinkingConfig", JSONObject().put("thinkingLevel", "HIGH"))
+        }
         val setup = JSONObject()
             .put("model", "models/${att.model}")
             .put("generationConfig", gen)
-            .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemInstruction))))
-        if (att.level < 3) {
-            setup.put("inputAudioTranscription", JSONObject())
-            setup.put("outputAudioTranscription", JSONObject())
-        }
         ws?.send(JSONObject().put("setup", setup).toString())
     }
 
@@ -230,6 +241,17 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
             attempts.getOrNull(attempt)?.let { store.liveModel = it.model; store.liveSetupLevel = it.level; store.liveVersion = it.version }
             _state.value = State.Listening
             startMic(); startPlayer()
+            // Speak FIRST, like BADSHAH AI: greet Babu Jaan the moment the call
+            // connects, instead of waiting silently for him. The official SDK
+            // sends this as snake_case client_content (verified live 2026-11-26:
+            // RANI answered "Hi Babu Jaan! Call connect ho gayi! ..." in ~8 s).
+            val greet = JSONObject().put("client_content", JSONObject()
+                .put("turns", JSONArray().put(JSONObject()
+                    .put("role", "user")
+                    .put("parts", JSONArray().put(JSONObject().put("text",
+                        "(The call just connected. Greet me warmly right now, speak first, call me Babu Jaan, and ask how you can help — in a real girl's loving voice.)")))))
+                .put("turnComplete", true))
+            ws?.send(greet.toString())
             return
         }
         // Session resumption: the server hands us a handle; reconnects reuse it so a
