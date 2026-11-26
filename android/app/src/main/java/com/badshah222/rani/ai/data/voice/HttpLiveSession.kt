@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -152,13 +153,21 @@ class HttpLiveSession(private val context: Context, private val store: SecureSto
         // WebSocket engine did it. The user's own Gemini key (Settings) is the
         // fallback when the pool is unreachable or the user is not signed in.
         // The fetch runs on a worker thread (≤9 s) so the call screen never freezes.
+        //
+        // v1.5.2 — KEY ORDER REVERSED: the user's OWN key first. It is the
+        // one PROVEN to work with Google Live (the VM curl test used it and
+        // RANI greeted + spoke). The pooled key's validity for Live was never
+        // proven, and a bad pooled key would fail the call while the good own
+        // key sat unused. The pooled key stays the fallback when no own key
+        // is saved. This also skips the ≤9 s pooled fetch when the own key
+        // is present, so the call starts faster.
         thread(isDaemon = true) {
-            val pooled = runCatching {
+            val own = store.apiKey(Provider.GEMINI)
+            val key = own ?: runCatching {
                 runBlocking {
                     withTimeoutOrNull(9_000) { worker?.liveKey() }
                 }
             }.getOrNull()
-            val key = pooled ?: store.apiKey(Provider.GEMINI)
             if (key == null) {
                 running = false
                 setCommMode(false)
@@ -287,53 +296,65 @@ class HttpLiveSession(private val context: Context, private val store: SecureSto
             .build()
         val call = liveHttp.newCall(request)
         httpCall = call
-        // Execute on a worker thread. The response headers arrive immediately
-        // (the Worker returns the stream at once); the body streams for the
-        // whole call. Read frames until the stream ends or the call stops.
-        thread(isDaemon = true, name = "http-live") {
-            try {
-                val response = call.execute()
-                if (!running || tok != attemptToken) { runCatching { response.close() }; return@thread }
+        // v1.5.2 — ENQUEUE, not execute(): v1.5.1 added isDuplex() but the
+        // phone STILL hit the 15 s watchdog. `call.execute()` is synchronous:
+        // OkHttp writes the (never-ending) mic body on the calling thread
+        // before it returns the Response, so even with isDuplex() the
+        // response was never read on the phone. `enqueue()` is the async
+        // path OkHttp documents for duplex/streaming (how gRPC does it):
+        // onResponse fires as soon as the response headers arrive, while
+        // writeTo keeps streaming mic on OkHttp's side. The frame reader
+        // then runs on its own thread so it never blocks the dispatcher.
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (!running || tok != attemptToken) return
+                if (!setupDone) {
+                    fail("Live connection fail ho gaya (model: gemini-3.8-live): ${(e.message ?: "network error").take(90)}")
+                } else {
+                    reconnect(key, "Live connection dropped.")
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                if (!running || tok != attemptToken) { runCatching { response.close() }; return }
                 if (!response.isSuccessful) {
                     val msg = "Live voice error (HTTP ${response.code})."
                     runCatching { response.close() }
                     if (!setupDone) fail(msg) else reconnect(key, msg)
-                    return@thread
+                    return
                 }
                 val body = response.body
                 if (body == null) {
                     runCatching { response.close() }
                     if (!setupDone) fail("Live voice error (empty response).") else reconnect(key, "Live connection ended.")
-                    return@thread
+                    return
                 }
                 // The call is live from here: start mic + player so the user's
                 // first words are already streaming when RANI greets (the
                 // Worker queues mic data until its Google setup is sent, so
                 // nothing is lost).
                 startMic(); startPlayer()
-                readFrames(body.byteStream(), key, tok)
-                // readFrames returned (stream ended).
-                runCatching { response.close() }
-                if (!running || tok != attemptToken) return@thread
-                if (advancing) return@thread // a reconnect is already in progress
-                if (!setupDone) {
-                    fail("Live connection did not start in 15 seconds (model: gemini-3.8-live). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.")
-                } else {
-                    reconnect(key, "Live connection ended.")
+                thread(isDaemon = true, name = "http-live-read") {
+                    try {
+                        readFrames(body.byteStream(), key, tok)
+                    } catch (e: Exception) {
+                        if (!running || tok != attemptToken) return@thread
+                        if (!setupDone) fail("Live connection fail ho gaya (model: gemini-3.8-live): ${(e.message ?: "network error").take(90)}")
+                        else reconnect(key, "Live connection dropped.")
+                        return@thread
+                    }
+                    // readFrames returned (stream ended).
+                    runCatching { response.close() }
+                    if (!running || tok != attemptToken) return@thread
+                    if (advancing) return@thread // a reconnect is already in progress
+                    if (!setupDone) {
+                        fail("Live connection did not start in 15 seconds (model: gemini-3.8-live). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.")
+                    } else {
+                        reconnect(key, "Live connection ended.")
+                    }
                 }
-            } catch (e: IOException) {
-                if (!running || tok != attemptToken) return@thread
-                if (!setupDone) {
-                    fail("Live connection fail ho gaya (model: gemini-3.8-live): ${(e.message ?: "network error").take(90)}")
-                } else {
-                    reconnect(key, "Live connection dropped.")
-                }
-            } catch (e: Exception) {
-                if (!running || tok != attemptToken) return@thread
-                if (!setupDone) fail("Live connection fail ho gaya (model: gemini-3.8-live): ${(e.message ?: "network error").take(90)}")
-                else reconnect(key, "Live connection dropped.")
             }
-        }
+        })
     }
 
     /** Read length-prefixed frames until the stream ends. Returns when the
