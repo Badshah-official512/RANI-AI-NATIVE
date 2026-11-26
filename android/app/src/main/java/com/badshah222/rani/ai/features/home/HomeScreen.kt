@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.badshah222.rani.ai.BuildConfig
 import com.badshah222.rani.ai.RaniApp
 import com.badshah222.rani.ai.core.AwarenessMonitor
 import com.badshah222.rani.ai.core.FloatingOrbService
@@ -58,6 +59,7 @@ import com.badshah222.rani.ai.ui.stonic.StonicStatusBar
 import com.badshah222.rani.ai.ui.theme.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
@@ -233,33 +235,52 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
      *  Requiring only the own key here blocked the pooled-key call for signed-in
      *  users. */
     fun liveAvailable(): Boolean = c.store.liveEnabled && (c.store.apiKey(Provider.GEMINI) != null || c.auth.current != null)
-    /** HTTP LiveSession entry — the PRIMARY call engine (v1.5.0, boss's order:
-     *  no web page). The call runs over plain HTTP streaming to the Cloudflare
-     *  Worker (POST /api/live-http) — NO WebSocket on the phone, NO web page:
-     *  the Worker holds the Google Live socket, the phone streams mic PCM up
-     *  and framed audio/text down. Single attempt, gemini-3.8-live only. If
-     *  Live cannot run, liveFallback fires and the call screen falls back to
-     *  classic mode. */
+    /** Live call entry — BADSHAH's WebView engine (v1.6.0, boss's order
+     *  2026-11-27). The call runs in RaniLiveActivity, a plain Activity
+     *  hosting the RANI Live page, which uses the browser's own `new
+     *  WebSocket` direct to Google Live — BADSHAH's exact way, the path that
+     *  works perfectly on the boss's phone while every native engine
+     *  (OkHttp / Java-WebSocket / HTTP relay, v1.1.0-v1.5.2) hung. Single
+     *  attempt, gemini-3.8-live only. If no key exists at all, liveFallback
+     *  fires and the call screen falls back to classic mode.
+     *  (No detectLiveModel pre-flight here — the page is the authority and
+     *  shows its own error if the model does not run on the key.) */
     fun startLiveSession() {
-        callOverlayAsked = false
         liveFallback.value = null
         viewModelScope.launch {
-            // Fail fast: if this key offers no Live voice model at all, do not burn
-            // the whole model ladder on "Connecting…" — say so at once.
-            if (c.store.liveModel == null) {
-                val found = c.ai.detectLiveModel()
-                if (found == null) {
-                    liveFallback.value = "Live voice could not be confirmed for this Gemini key. Check the internet, then open Settings → Live Voice → Test Live voice and pick a working model."
-                    return@launch
-                }
+            // v1.5.2 key order kept: the user's OWN Gemini key first (proven
+            // to work with Google Live); the pooled key (/api/live-key,
+            // Firebase-login gated) is the fallback, fetched on a worker
+            // thread (≤9 s) so the call screen never freezes.
+            val own = c.store.apiKey(Provider.GEMINI)
+            val key = own ?: runCatching {
+                runBlocking { withTimeoutOrNull(9_000) { c.worker.liveKey() } }
+            }.getOrNull()
+            if (key.isNullOrBlank()) {
+                val reason = "Add your Google Gemini API key in Settings to use the real voice (or sign in so the pooled key can be used)."
+                liveFallback.value = reason
+                c.store.lastLiveError = reason
+                return@launch
             }
-            val emo = c.store.emotionId?.let { Emotions.fromId(it) } ?: emotion.value
-            // The panel's call greeting opens the Live call (voice-only, never on screen).
-            val greeting = c.remoteConfig.callGreeting()
-            c.httpLive.start(c.ai.systemPrompt(emo.style) + "\nStart the call by greeting the user with: \"$greeting\"")
+            val intent = Intent(getApplication<Application>(), RaniLiveActivity::class.java).apply {
+                putExtra(RaniLiveActivity.EXTRA_KEY, key)
+                putExtra(RaniLiveActivity.EXTRA_VOICE, c.store.liveVoiceName)
+                putExtra(RaniLiveActivity.EXTRA_MODEL, "gemini-3.8-live")
+                putExtra(RaniLiveActivity.EXTRA_VER, BuildConfig.VERSION_NAME)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            getApplication<Application>().startActivity(intent)
         }
     }
-    fun stopLiveSession() = c.httpLive.stop()
+    /** End the Live call: stop the (unused) HTTP engine and tell the call
+     *  Activity to finish. Safe when the Activity is already gone — the
+     *  broadcast simply has no receiver then. */
+    fun stopLiveSession() {
+        c.httpLive.stop()
+        runCatching {
+            getApplication<Application>().sendBroadcast(Intent(RaniLiveActivity.ACTION_END_LIVE))
+        }
+    }
     private var convoId: String? = null
     private var lastAction: PhoneAction? = null
 

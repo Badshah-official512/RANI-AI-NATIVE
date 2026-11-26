@@ -28,8 +28,8 @@ android {
         applicationId = "com.badshah222.rani.ai"   // must match Firebase (google-services.json)
         minSdk = 26
         targetSdk = 35
-        versionCode = 14
-        versionName = "1.5.2"
+        versionCode = 15
+        versionName = "1.6.0"
         // Supabase values come from CI secrets (see docs/SETUP-SECRETS.md). findProperty
         // with a placeholder fallback keeps debug builds green before secrets exist.
         buildConfigField("String", "SUPABASE_URL", "\"${project.findProperty("SUPABASE_URL") ?: "https://placeholder.supabase.co"}\"")
