@@ -249,8 +249,20 @@ class HttpLiveSession(private val context: Context, private val store: SecureSto
         // micQueue as they are recorded; writeTo drains them into the HTTP
         // body (chunked) as they arrive. writeTo runs on OkHttp's dispatcher
         // thread and blocks on the queue — that is the stream.
+        //
+        // v1.5.1 FIX (root cause, proven): OkHttp does NOT read the response
+        // until a NON-duplex request body is fully written. Our body never
+        // ends (mic streams for the whole call), so `call.execute()` sat in
+        // writeTo forever and the response — "connected" + RANI's audio, which
+        // the Worker WAS sending (curl proves it, VM test) — was NEVER read.
+        // That is why the phone still hit the 15 s watchdog while curl worked.
+        // isDuplex() = true tells OkHttp this is a bidirectional stream: it
+        // reads the response concurrently while the body keeps streaming.
+        // isOneShot() = true because mic data cannot be replayed on retry.
         val requestBody = object : RequestBody() {
             override fun contentType() = "application/octet-stream".toMediaType()
+            override fun isDuplex() = true
+            override fun isOneShot() = true
             override fun writeTo(sink: BufferedSink) {
                 try {
                     while (true) {
