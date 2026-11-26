@@ -58,6 +58,8 @@ import com.badshah222.rani.ai.ui.stonic.StonicStatusBar
 import com.badshah222.rani.ai.ui.theme.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import java.net.URLEncoder
 
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val c = (app as RaniApp).container
@@ -196,6 +198,37 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     fun requestLive() {
         viewModelScope.launch { if (voiceGateOk()) startLiveSession() }
     }
+
+    // ---- Gemini Live via the BADSHAH-style web page (v1.3.0) ----
+    /** The RANI Live page URL for the WebView call — null when no web call is active. */
+    val liveWebUrl = MutableStateFlow<String?>(null)
+    /** Start the Live call on the browser's WebSocket (BADSHAH's way). Resolves
+     *  the key exactly like LiveSession does (pooled first, own key fallback),
+     *  then hands the WebView a page that opens a plain `new WebSocket` to
+     *  Google Live. The native socket engines (OkHttp, Java-WebSocket) hang
+     *  silently on this phone; the browser's engine works (BADSHAH AI proves it).
+     *  Boss's order: ONLY gemini-3.8-live, one request. */
+    fun requestLiveWeb() {
+        liveFallback.value = null
+        viewModelScope.launch {
+            val pooled = runCatching { withTimeoutOrNull(9_000) { c.worker?.liveKey() } }.getOrNull()
+            val key = pooled ?: c.store.apiKey(Provider.GEMINI)
+            if (key == null) {
+                liveFallback.value = "Add your Google Gemini API key in Settings to use the real voice (or sign in so the pooled key can be used)."
+                return@launch
+            }
+            val voice = c.store.liveVoiceName
+            val model = LiveModels.fromKey(LiveModels.DEFAULT_KEY).modelId // gemini-3.8-live
+            val v = com.badshah222.rani.ai.BuildConfig.VERSION_NAME
+            val url = "https://badshah222-ai.pages.dev/rani-live" +
+                "?key=" + URLEncoder.encode(key, "UTF-8") +
+                "&voice=" + URLEncoder.encode(voice, "UTF-8") +
+                "&model=" + URLEncoder.encode(model, "UTF-8") +
+                "&v=" + URLEncoder.encode(v, "UTF-8")
+            liveWebUrl.value = url
+        }
+    }
+    fun stopLiveWeb() { liveWebUrl.value = null }
 
     // ---- Gemini Live (real human voice) ----
     val live = c.live
