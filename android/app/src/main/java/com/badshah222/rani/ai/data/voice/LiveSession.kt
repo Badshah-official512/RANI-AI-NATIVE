@@ -17,13 +17,11 @@ import com.badshah222.rani.ai.domain.LiveModels
 import com.badshah222.rani.ai.domain.Provider
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
+import org.java_websocket.client.WebSocketClient
+import org.java_websocket.handshake.ServerHandshake
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URI
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -60,36 +58,33 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
     /** Fired when Live cannot run at all — the caller should use the classic voice mode. */
     var onUnavailable: ((reason: String) -> Unit)? = null
 
-    private val client = OkHttpClient.Builder().pingInterval(20, TimeUnit.SECONDS)
-        .connectTimeout(15, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).build()
-
+    // v1.2.3 — NO OkHttp for the Live socket. OkHttp's WebSocket failed on this
+    // phone three times (v1.1.0 direct, v1.2.0 proxy+direct, v1.2.2 proxy with a
+    // browser-identical handshake — every time the same silent 15 s hang), while
+    // the browser's WebSocket and Python's both work on the same phone + key.
+    // So the engine is now org.java-websocket: a raw java.net.Socket that sends
+    // a plain HTTP/1.1 upgrade — no OkHttp HTTP stack, no HTTP/2, no connection
+    // pool. OkHttp is still used for the app's HTTP calls (WorkerApi); only the
+    // Live WebSocket moved off it.
     @Volatile private var running = false
     @Volatile private var setupDone = false
     @Volatile private var reconnects = 0
-    /** One connection attempt: a model + a setup variant + an API version. The engine walks
-     *  this list until the server accepts a setup. Levels: 0 = BADSHAH's exact way
-     *  (?key= in the URL + full SDK setup), 1 = the official SDK's way (x-goog-api-key
-     *  header + full setup), 3 = header + bare setup (for models that reject fields).
-     *  Both auth methods are proven to connect (verified live 2026-11-26); the ladder
-     *  tries them in order so a phone that dislikes one still connects on the other.
-     *  PROXY FIRST (2026-11-26, v1.2.0): the phone's OkHttp WebSocket cannot hold a
-     *  direct socket to Google Live — it is aborted / hangs on both 4G and WiFi,
-     *  while the browser's WebSocket works fine on the same phone and key. The
-     *  phone CAN reach the BADSHAH Worker reliably, and the Worker (Cloudflare
-     *  edge) CAN reach Google Live — verified end-to-end 2026-11-26 (setupComplete
-     *  in 0.2 s, RANI spoke). So the call goes through the Worker proxy
-     *  (wss://badshah222-ai.pages.dev/api/live, key in ?key=, browser-identical
-     *  handshake — v1.2.1, after v1.2.0's X-Gemini-Key header was also dropped
-     *  silently by the phone's path).
-     *  SINGLE ATTEMPT (2026-11-26, v1.2.2 — boss's order): ONLY gemini-3.8-live,
-     *  ONE request. The 10-attempt ladder is gone — no other models, no direct
-     *  fallback. If the one attempt fails, the error shows at once. */
+    /** One connection attempt: a model + a setup variant + an API version.
+     *  v1.2.2 (boss's order) removed the ladder — there is exactly ONE attempt
+     *  (gemini-3.8-live via the Worker proxy), so `level` is always 0 (full
+     *  setup) and `proxy` is always true. The fields stay so the setup code
+     *  and the "what worked" record keep working unchanged.
+     *  v1.2.3: the socket engine is org.java-websocket (raw socket), NOT
+     *  OkHttp — OkHttp's WebSocket hung silently on this phone three times
+     *  (v1.1.0, v1.2.0, v1.2.2) while the browser's and Python's both work.
+     *  The Worker proxy (wss://badshah222-ai.pages.dev/api/live, key in ?key=,
+     *  browser-identical handshake) still holds the Google side. */
     private data class Attempt(val model: String, val level: Int, val version: String, val proxy: Boolean = false)
     private var attempts: List<Attempt> = emptyList()
     @Volatile private var attempt = 0
     @Volatile private var attemptToken = 0
     @Volatile private var advancing = false
-    private var ws: WebSocket? = null
+    private var ws: WebSocketClient? = null
     private var recorder: AudioRecord? = null
     @Volatile private var micThread: Thread? = null
     private var track: AudioTrack? = null
@@ -181,8 +176,7 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
         setupDone = false
         // Watchdog: a hung handshake must never leave the screen on "Connecting…" forever.
         // 15 s — the boss's 4G is slow, so a working model gets room to finish its setup.
-        _attemptInfo.value = if (att.proxy) "Trying ${att.model} via Cloudflare · attempt ${attempt + 1} of ${attempts.size}"
-            else "Trying ${att.model} · attempt ${attempt + 1} of ${attempts.size}"
+        _attemptInfo.value = "Trying ${att.model} via Cloudflare · attempt ${attempt + 1} of ${attempts.size}"
         val tok = ++attemptToken
         thread(isDaemon = true) {
             Thread.sleep(15000)
@@ -190,80 +184,55 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
                 nextOrFail(key, "Live connection did not start in 15 seconds (model: ${att.model}). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.")
             }
         }
-        // PROXY (att.proxy): the Worker relay at badshah222-ai.pages.dev/api/live.
-        // The phone reaches Cloudflare reliably; Cloudflare reaches Google Live.
-        // v1.2.1 — BROWSER-IDENTICAL HANDSHAKE: v1.2.0's proxy attempt ALSO failed
-        // on the phone (full ladder ran, every attempt "did not start in 15 seconds",
-        // key saved + valid, gemini-3.8-live offered — Settings 2026-11-26 20:06 PKT).
-        // The browser's WebSocket works on the same phone + network, OkHttp's does
-        // not — to BOTH Google and Cloudflare, on BOTH 4G and WiFi. The only
-        // difference is the upgrade request itself: v1.2.0 sent non-browser
-        // headers (X-Gemini-Key on the proxy; Content-Type + custom UA +
-        // x-goog-api-client on direct), which a middlebox can flag and silently
-        // drop (a silent 15 s hang, never an error). So this handshake sends
-        // NOTHING a Chrome browser would not send: the key travels in ?key=
-        // (the Worker accepts it; BADSHAH's web app authenticates the same way),
-        // and every header is one Chrome sends on a WebSocket upgrade.
-        // No custom header, no Content-Type, no SDK client string, no app UA.
-        if (att.proxy) {
-            val reqBuilder = Request.Builder()
-                .url("wss://badshah222-ai.pages.dev/api/live?key=${java.net.URLEncoder.encode(key, "UTF-8")}")
-                .addHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14; TECNO KM4k) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
-                .addHeader("Origin", "https://badshah222-ai.pages.dev")
-                .addHeader("Accept-Language", "en-US,en;q=0.9")
-                .addHeader("Accept-Encoding", "gzip, deflate, br, zstd")
-                .addHeader("Cache-Control", "no-cache")
-                .addHeader("Pragma", "no-cache")
-            ws = client.newWebSocket(reqBuilder.build(), liveListener(key, att, tok))
-            return
-        }
-        // Auth: level 0 is BADSHAH's exact way — the key in the ?key= URL
-        // (the BADSHAH web app's Live connects this way on the phone and
-        // speaks first). Levels 1/3 are the official SDK's way — the key in
-        // the x-goog-api-key header. Both are verified to complete setup
-        // (2026-11-26, raw client through the proxy: ?key=, header, and both
-        // together all reached setupComplete). The ladder tries BADSHAH's way
-        // first, then the SDK's way, so either path can save the call.
-        // v1.2.1: the upgrade request is browser-identical on every level —
-        // Chrome UA + Origin + the headers Chrome sends, and NO Content-Type,
-        // NO x-goog-api-client, NO app UA (see the proxy note above — those
-        // non-browser headers are what the middlebox flags). Levels 1/3 keep
-        // only x-goog-api-key, which that auth method cannot do without.
-        val baseUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${att.version}.GenerativeService.BidiGenerateContent"
-        val reqBuilder = Request.Builder()
-            .addHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14; TECNO KM4k) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
-            .addHeader("Origin", "https://badshah222-ai.pages.dev")
-            .addHeader("Accept-Language", "en-US,en;q=0.9")
-            .addHeader("Accept-Encoding", "gzip, deflate, br, zstd")
-            .addHeader("Cache-Control", "no-cache")
-            .addHeader("Pragma", "no-cache")
-        if (att.level == 0) {
-            reqBuilder.url("$baseUrl?key=${java.net.URLEncoder.encode(key, "UTF-8")}")
-        } else {
-            reqBuilder.url(baseUrl).addHeader("x-goog-api-key", key)
-        }
-        ws = client.newWebSocket(reqBuilder.build(), liveListener(key, att, tok))
-    }
-
-    /** The shared WebSocket listener for proxy and direct attempts. */
-    private fun liveListener(key: String, att: Attempt, tok: Int) = object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) { sendSetup(att) }
-            override fun onMessage(webSocket: WebSocket, text: String) { handleMessage(text) }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                if (!running || tok != attemptToken) return
-                if (!setupDone) { nextOrFail(key, "Live connection fail ho gaya (model: ${att.model}): ${t.message?.take(90) ?: "network error"}"); return }
-                if (reconnects < 8) { reconnects++; Thread.sleep(minOf(600L * reconnects, 3000L)); if (running) connect(key, att) }
-                else fail("Live voice connection failed. Check your internet and try again.")
-            }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+        // v1.2.3 — JAVA-WEBSOCKET ENGINE, proxy only, single attempt (3.8-live).
+        // v1.2.2 (OkHttp, browser-identical handshake) ALSO failed with the same
+        // silent 15 s hang — the user confirmed the voice he hears is the
+        // chat+TTS fallback, not Gemini's real Live voice. So the headers were
+        // NOT the cause. OkHttp's WebSocket engine itself cannot open a socket
+        // on this phone (to Google AND to Cloudflare), while the browser's
+        // WebSocket and Python's both work. This engine (org.java-websocket)
+        // opens a raw java.net.Socket and sends a plain HTTP/1.1 upgrade —
+        // no OkHttp HTTP stack, no HTTP/2, no connection pool. The handshake
+        // stays browser-identical (key in ?key=, Chrome UA + Origin + the
+        // headers Chrome sends, no custom headers). The Worker relay at
+        // badshah222-ai.pages.dev/api/live still holds the Google side.
+        // Single attempt, gemini-3.8-live only (boss's order, v1.2.2) — if it
+        // fails, the error shows at once and the call ends.
+        val url = "wss://badshah222-ai.pages.dev/api/live?key=${java.net.URLEncoder.encode(key, "UTF-8")}"
+        val headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 14; TECNO KM4k) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+            "Origin" to "https://badshah222-ai.pages.dev",
+            "Accept-Language" to "en-US,en;q=0.9",
+            "Accept-Encoding" to "gzip, deflate, br, zstd",
+            "Cache-Control" to "no-cache",
+            "Pragma" to "no-cache"
+        )
+        val socket = object : WebSocketClient(URI(url), headers) {
+            override fun onOpen(handshakedata: ServerHandshake?) { sendSetup(att) }
+            override fun onMessage(message: String?) { if (message != null) handleMessage(message) }
+            override fun onClose(code: Int, reason: String?, remote: Boolean) {
                 if (!running || tok != attemptToken) return
                 // Any close before the session is ready is a failed attempt — move on at
                 // once instead of waiting for the watchdog (a 1000 close used to hang here).
-                if (!setupDone) { nextOrFail(key, "Live band ho gaya (model: ${att.model}, code $code ${reason.take(60)})"); return }
+                if (!setupDone) { nextOrFail(key, "Live band ho gaya (model: ${att.model}, code $code ${(reason ?: "").take(60)})"); return }
                 if (setupDone && reconnects < 8 && code != 1008) { reconnects++; if (running) connect(key, att) }
                 else if (code == 1008 || code == 1007) fail("The live voice was refused for this key or model. Open Settings → Live Voice and press Test to pick a working model.")
             }
+            override fun onError(ex: Exception?) {
+                // Java-WebSocket calls onClose right after onError when the socket
+                // dies, and onClose owns the reconnect — so onError only reports
+                // a failure that never reached onClose (e.g. the handshake itself
+                // was refused). The token/advancing guards stop double-handling.
+                if (!running || tok != attemptToken) return
+                if (!setupDone) { nextOrFail(key, "Live connection fail ho gaya (model: ${att.model}): ${(ex?.message ?: "network error").take(90)}"); return }
+            }
         }
+        // Disable Java-WebSocket's own ping-based liveness check — the app has its
+        // own watchdog + reconnect logic, and the Live server drives the traffic.
+        socket.connectionLostTimeout = 0
+        ws = socket
+        socket.connect()
+    }
 
     private fun sendSetup(att: Attempt) {
         val voice = store.liveVoiceName

@@ -28,8 +28,8 @@ android {
         applicationId = "com.badshah222.rani.ai"   // must match Firebase (google-services.json)
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.2.2"
+        versionCode = 6
+        versionName = "1.2.3"
         // Supabase values come from CI secrets (see docs/SETUP-SECRETS.md). findProperty
         // with a placeholder fallback keeps debug builds green before secrets exist.
         buildConfigField("String", "SUPABASE_URL", "\"${project.findProperty("SUPABASE_URL") ?: "https://placeholder.supabase.co"}\"")
@@ -84,6 +84,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Java-WebSocket — the Live voice socket engine (v1.2.3). OkHttp's WebSocket
+    // could not open a socket on the boss's phone (silent 15 s hang, three
+    // versions); this raw-socket client sends a plain HTTP/1.1 upgrade.
+    implementation("org.java-websocket:Java-WebSocket:1.5.7")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     // Firebase (versions managed by the BoM)
