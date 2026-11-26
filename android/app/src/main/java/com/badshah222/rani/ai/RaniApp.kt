@@ -16,6 +16,7 @@ import com.badshah222.rani.ai.data.supabase.SupabaseApi
 import com.badshah222.rani.ai.data.voice.LiveSession
 import com.badshah222.rani.ai.data.voice.SpeechInput
 import com.badshah222.rani.ai.data.voice.TtsManager
+import com.badshah222.rani.ai.data.worker.WorkerApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -25,13 +26,16 @@ class Container(app: Application) {
     val store = SecureStore(app)
     val auth = AuthRepository(app.getString(R.string.default_web_client_id)) // generated from google-services.json
     val cloud = SupabaseApi { auth.supabaseToken() }
+    // BADSHAH pooled API system (Cloudflare Worker): Groq chat, pooled image/video,
+    // and the pooled Live key — the same system the BADSHAH web app uses.
+    val worker = WorkerApi { auth.idToken() }
     // Remote config comes before the AI repo: the panel's Gemini model is the
     // fallback when the user has not picked a model yet.
     val remoteConfig = RaniRemoteConfig(store, cloud)
-    val ai = AiRepository(store, cloud, remoteConfig)
+    val ai = AiRepository(store, cloud, remoteConfig, worker)
     val tts = TtsManager(app, store, cloud)
     val speech = SpeechInput(app)
-    val live = LiveSession(app, store)
+    val live = LiveSession(app, store, worker)
     val phone = PhoneExecutor(app)
     val chats = ChatStore(app)
     // Stonic extras: Awareness, identity (voice-print + face-print).

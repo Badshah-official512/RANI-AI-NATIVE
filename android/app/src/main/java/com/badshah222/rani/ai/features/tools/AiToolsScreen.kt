@@ -69,6 +69,13 @@ class AiToolsViewModel(app: Application) : AndroidViewModel(app) {
                         imageBytes.value = bytes
                         result.value = "Image is ready. Saved: ${f.name}"
                     }
+                    "Generate Video" -> {
+                        // Video takes a few minutes (the pooled video system renders it).
+                        result.value = "Video ban rahi hai — is mein kuch minutes lag sakte hain. Screen band mat karo."
+                        val bytes = c.ai.generateVideo(x)
+                        val path = writeVideo(bytes)
+                        result.value = "Video is ready.\nSaved: $path"
+                    }
                     "Create PDF" -> {
                         val reply = c.ai.chat(listOf(ChatMessage("user", tool.template.replace("{x}", x))))
                         val path = writePdf(tool.name, reply.text)
@@ -97,6 +104,28 @@ class AiToolsViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: AiException) { error.value = e.userMessage }
             catch (e: Exception) { error.value = "Could not read the file: ${e.message?.take(120)}" }
             finally { busy.value = false }
+        }
+    }
+
+    private fun writeVideo(bytes: ByteArray): String {
+        val ctx = getApplication<Application>()
+        val name = "RANI_${System.currentTimeMillis()}.mp4"
+        return if (Build.VERSION.SDK_INT >= 29) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, name)
+                put(MediaStore.Downloads.MIME_TYPE, "video/mp4")
+                put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw IllegalStateException("Downloads could not be opened")
+            ctx.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+            "Downloads/$name"
+        } else {
+            @Suppress("DEPRECATION")
+            val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val f = File(dir, name)
+            f.writeBytes(bytes)
+            f.absolutePath
         }
     }
 

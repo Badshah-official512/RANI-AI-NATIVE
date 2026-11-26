@@ -199,6 +199,12 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
                 if (liveMode) "Real voice · Gemini Live" else "Classic voice mode",
                 Modifier.fillMaxWidth().padding(top = 4.dp), textAlign = TextAlign.Center, color = Mute, style = MaterialTheme.typography.bodySmall,
             )
+            // App version on the call screen — proves which build is installed
+            // (v1.1.0+ = BADSHAH pooled-key system; older = own key only).
+            Text(
+                "RANI AI GF v${com.badshah222.rani.ai.BuildConfig.VERSION_NAME}",
+                Modifier.fillMaxWidth().padding(top = 2.dp), textAlign = TextAlign.Center, color = Mute, style = MaterialTheme.typography.bodySmall,
+            )
             // While connecting, show exactly which model is being tried — and the
             // real reason the last try failed — so a stuck call never looks silent.
             if (liveMode && liveState == LiveSession.State.Connecting) {

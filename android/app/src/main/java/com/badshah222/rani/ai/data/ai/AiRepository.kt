@@ -3,8 +3,10 @@ package com.badshah222.rani.ai.data.ai
 import com.badshah222.rani.ai.core.RaniRemoteConfig
 import com.badshah222.rani.ai.core.SecureStore
 import com.badshah222.rani.ai.data.supabase.SupabaseApi
+import com.badshah222.rani.ai.data.worker.WorkerApi
 import com.badshah222.rani.ai.domain.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -13,7 +15,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Provider switching + per-user keys + usage reporting. There is NO shared developer key anywhere. Chat runs only on the user's own keys (Gemini / Groq / OpenRouter). */
-class AiRepository(private val store: SecureStore, private val cloud: SupabaseApi, private val remoteConfig: RaniRemoteConfig? = null) {
+class AiRepository(private val store: SecureStore, private val cloud: SupabaseApi, private val remoteConfig: RaniRemoteConfig? = null, private val worker: WorkerApi? = null) {
     private val clients = mapOf(Provider.GEMINI to GeminiClient(), Provider.GROQ to GroqClient(), Provider.OPENROUTER to OpenRouterClient())
     private fun client(p: Provider) = clients.getValue(p)
 
@@ -55,24 +57,75 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
         store.responseStyle,
     )
 
+    /**
+     * Chat — BADSHAH system first: the owner's pooled Groq key via the Worker
+     * (Supabase `api_keys`, provider groq — no user key needed, multi-turn
+     * works because persona + recent history are composed into the request).
+     * The Worker is single-turn server-side, so the persona and the last few
+     * turns travel inside the one message. Falls back to the user's own
+     * provider/key (Gemini / Groq / OpenRouter) when the Worker is down,
+     * rate-limited, or returns nothing — chat never hard-depends on it.
+     */
     suspend fun chat(
         history: List<ChatMessage>,
         emotionStyle: String = "Speak warmly and heartily, like a close friend who is genuinely glad to talk.",
         systemOverride: String? = null,
     ): AiReply {
+        val system = systemOverride ?: systemPrompt(emotionStyle)
+        val t0 = System.currentTimeMillis()
+        worker?.let { w ->
+            val text = runCatching { w.chatGroq(composeWorkerChat(system, history)) }.getOrNull()
+            if (!text.isNullOrBlank()) {
+                val reply = AiReply(text.trim(), Provider.GROQ, WorkerApi.GROQ_MODEL, 0, 0, System.currentTimeMillis() - t0)
+                cloud.recordUsage("groq", WorkerApi.GROQ_MODEL, "chat", true, 0, 0, reply.latencyMs.toInt(), null)
+                return reply
+            }
+        }
         val p = store.provider
         val key = store.apiKey(p) ?: throw AiException("no_key", "no key", "Add your ${p.label} API key in Settings to start chatting.")
         // Panel default (gemini group, seed "gemini-3.8-flash") when the user has not picked a model yet.
         val model = store.model(p) ?: (if (p == Provider.GEMINI) remoteConfig?.geminiModel() else null)
             ?: throw AiException("no_model", "no model", "Test your ${p.label} connection and choose a model in Settings.")
         return try {
-            val reply = client(p).chat(key, model, systemOverride ?: systemPrompt(emotionStyle), history.takeLast(20))
+            val reply = client(p).chat(key, model, system, history.takeLast(20))
             cloud.recordUsage(p.id, model, "chat", true, reply.inputTokens, reply.outputTokens, reply.latencyMs.toInt(), null)
             reply
         } catch (e: AiException) {
             cloud.recordUsage(p.id, model, "chat", false, 0, 0, null, e.code)
             throw e
         }
+    }
+
+    /** Composes persona + recent turns into the single message the Worker sends
+     *  to Groq. Keeps the last 8 turns; drops the oldest turns first when the
+     *  text would pass 6000 chars (far inside the Worker's 65000-char limit).
+     *  The trailing "answer as RANI" line matters: without it Groq sometimes
+     *  introduces itself as BADSHAH AI; a NEGATIVE "you are NOT BADSHAH AI"
+     *  makes gpt-oss refuse outright — so the identity is stated positively
+     *  only, at the end where the model weighs it most. */
+    private fun composeWorkerChat(system: String, history: List<ChatMessage>): String {
+        val turns = history.takeLast(8).toMutableList()
+        while (turns.size > 1) {
+            val q = buildString {
+                append(system.trim()).append("\n\n")
+                append("Recent conversation (you are RANI, the user is Babu Jaan):\n")
+                for (m in turns) {
+                    append(if (m.role == "assistant") "RANI: " else "Babu Jaan: ")
+                        .append(m.content.trim()).append("\n")
+                }
+                append("\nNow answer as RANI, warmly and lovingly, in the same language as Babu Jaan.")
+            }
+            if (q.length <= 6000) return q
+            turns.removeAt(0)
+        }
+        return buildString {
+            append(system.trim()).append("\n\n")
+            for (m in turns) {
+                append(if (m.role == "assistant") "RANI: " else "Babu Jaan: ")
+                    .append(m.content.trim()).append("\n")
+            }
+            append("\nNow answer as RANI, warmly and lovingly, in the same language as Babu Jaan.")
+        }.take(6000)
     }
 
     /**
@@ -111,17 +164,26 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
     }
 
     /**
-     * Image generation with the user's own Gemini key (MYRA Image Studio behavior):
-     * the Gemini image model returns the picture as inline data. The caller falls
-     * back to the free Pollinations image URL when this throws.
+     * Image generation — BADSHAH system first: the owner's pooled image system
+     * via the Worker (Gemini pool, Pollinations fallback server-side), so no
+     * user key is needed. Falls back to the user's own Gemini key
+     * (gemini-2.5-flash-image), and the caller falls back to the free
+     * Pollinations URL when this throws.
      */
     suspend fun generateImage(prompt: String): ByteArray {
+        val t0 = System.currentTimeMillis()
+        worker?.let { w ->
+            val bytes = runCatching { w.image(prompt) }.getOrNull()
+            if (bytes != null && bytes.isNotEmpty()) {
+                cloud.recordUsage("gemini", WorkerApi.IMAGE_MODEL, "image", true, 0, 0, (System.currentTimeMillis() - t0).toInt(), null)
+                return bytes
+            }
+        }
         val key = store.apiKey(Provider.GEMINI) ?: throw AiException(
             "no_key", "no gemini key",
             "To create an image, first add your Google Gemini key in Settings > API Keys.",
         )
         val model = "gemini-2.5-flash-image"
-        val t0 = System.currentTimeMillis()
         val payload = JSONObject()
             .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(JSONObject().put("text", prompt)))))
             .put("generationConfig", JSONObject().put("responseModalities", JSONArray().put("TEXT").put("IMAGE")))
@@ -147,6 +209,38 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
         }
         cloud.recordUsage("gemini", model, "image", true, 0, 0, (System.currentTimeMillis() - t0).toInt(), null)
         return bytes
+    }
+
+    /**
+     * Video generation — BADSHAH system: the owner's pooled video system via
+     * the Worker (long-running job: start, then poll until done). The job
+     * takes a few minutes; this suspends while polling (15 s apart, up to
+     * ~7 minutes). Returns the finished video bytes (mp4). Throws AiException
+     * when the job cannot start (the pooled key cannot run video) or does not
+     * finish in time — the caller shows the message and the user can retry.
+     */
+    suspend fun generateVideo(prompt: String): ByteArray {
+        val w = worker ?: throw AiException("no_worker", "no worker", "Video needs the pooled video system, which is not available right now.")
+        val t0 = System.currentTimeMillis()
+        val name = w.startVideo(prompt)
+            ?: throw AiException("video_start", "video did not start", "Video abhi start nahi ho saka — the pooled key cannot run video right now. Try again later, or ask for an image instead.")
+        // Poll until done (video takes a few minutes).
+        repeat(28) {
+            delay(15_000)
+            val status = runCatching { w.videoStatus(name) }.getOrNull() ?: return@repeat
+            if (status.optBoolean("done")) {
+                val bytes = w.videoBytes(status)
+                if (bytes != null && bytes.isNotEmpty()) {
+                    cloud.recordUsage("gemini", WorkerApi.VIDEO_MODEL, "video", true, 0, 0, (System.currentTimeMillis() - t0).toInt(), null)
+                    return bytes
+                }
+                throw AiException("video_empty", "video empty", "The video finished but came back empty. Try a different prompt.")
+            }
+            if (status.has("error")) {
+                throw AiException("video_error", status.optString("error").take(160), "Video failed: ${status.optString("error").take(120)}")
+            }
+        }
+        throw AiException("video_timeout", "video timeout", "Video abhi tayyar nahi hui (7 minutes) — it is still rendering. Try again in a bit.")
     }
 
     /**

@@ -43,6 +43,14 @@ class AuthRepository(private val webClientId: String) {
     fun providerId(): String = current?.providerData?.firstOrNull { it.providerId != "firebase" }?.providerId ?: "password"
     fun signOut() = auth.signOut()
 
+    /** A plain Firebase ID token (no Supabase role claim needed) — used for
+     *  the BADSHAH Worker (/api/live-key), which verifies it as a Firebase
+     *  token. Returns null when not signed in. */
+    suspend fun idToken(): String? {
+        val user = auth.currentUser ?: return null
+        return runCatching { user.getIdToken(false).await().token }.getOrNull()
+    }
+
     /**
      * Returns a Firebase ID token carrying role=authenticated (needed by Supabase), or null.
      * If the claim is missing, asks the deployed `setSupabaseClaims` Cloud Function to stamp it, then refreshes.

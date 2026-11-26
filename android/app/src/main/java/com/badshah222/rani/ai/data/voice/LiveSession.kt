@@ -12,6 +12,7 @@ import android.media.MediaRecorder
 import android.util.Base64
 import androidx.core.content.ContextCompat
 import com.badshah222.rani.ai.core.SecureStore
+import com.badshah222.rani.ai.data.worker.WorkerApi
 import com.badshah222.rani.ai.domain.LiveModels
 import com.badshah222.rani.ai.domain.Provider
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,7 +40,7 @@ import kotlin.concurrent.thread
  * (no Gemini key, no live model for the key, connection failure), [onUnavailable] fires
  * and the caller falls back to the classic listen→think→speak pipeline.
  */
-class LiveSession(private val context: Context, private val store: SecureStore) {
+class LiveSession(private val context: Context, private val store: SecureStore, private val worker: WorkerApi? = null) {
 
     enum class State { Idle, Connecting, Listening, Thinking, Speaking, Error }
 
@@ -66,8 +67,11 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
     @Volatile private var setupDone = false
     @Volatile private var reconnects = 0
     /** One connection attempt: a model + a setup variant + an API version. The engine walks
-     *  this list until the server accepts a setup — different Live models accept different
-     *  setup fields (native-audio models reject an explicit languageCode, for example). */
+     *  this list until the server accepts a setup. Levels: 0 = BADSHAH's exact way
+     *  (?key= in the URL + full SDK setup), 1 = the official SDK's way (x-goog-api-key
+     *  header + full setup), 3 = header + bare setup (for models that reject fields).
+     *  Both auth methods are proven to connect (verified live 2026-11-26); the ladder
+     *  tries them in order so a phone that dislikes one still connects on the other. */
     private data class Attempt(val model: String, val level: Int, val version: String)
     private var attempts: List<Attempt> = emptyList()
     @Volatile private var attempt = 0
@@ -95,30 +99,53 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
 
     fun start(systemInstruction: String) {
         if (running) return
-        val key = store.apiKey(Provider.GEMINI)
-        if (key == null) { onUnavailable?.invoke("Add your Google Gemini API key in Settings to use the real voice."); return }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             onUnavailable?.invoke("Microphone permission is needed for the voice call."); return
         }
-        this.systemInstruction = systemInstruction
-        sessionKey = key
-        running = true; setupDone = false; reconnects = 0; attempt = 0; advancing = false; resumeHandle = null
+        // Claim the session synchronously so a double-tap cannot start two calls.
+        running = true
+        setupDone = false; reconnects = 0; attempt = 0; advancing = false; resumeHandle = null
         sessionStartedAtMs = System.currentTimeMillis()
         _error.value = null; _userText.value = ""; _assistantText.value = ""
         setCommMode(true)
-        // Live models: the selected model first
-        // (default "3.8" — Gemini 3.8 Live, GA since 15 Sep 2026), then the other
-        // models in order as fallbacks. Each model is tried with the full
-        // setup first, then a bare setup (native-audio models reject some fields).
-        val selected = LiveModels.fromKey(store.liveModelKey)
-        // The model that worked last time connects first (fast connect), then the
-        // selected model, then the rest — every model in this list is real.
-        val lastWorking = store.liveModel?.let { LiveModels.fromModelId(it) }
-        val ordered = (listOfNotNull(lastWorking, selected) + LiveModels.all).distinctBy { it.key }
-        attempts = ordered.flatMap { m ->
-            listOf(Attempt(m.modelId, 0, m.version), Attempt(m.modelId, 3, m.version))
+        this.systemInstruction = systemInstruction
+        // BADSHAH system: the Live key is fetched FRESH at call time from the
+        // owner's pool (/api/live-key, Firebase-login gated) — exactly how the
+        // BADSHAH web app's Live works and speaks first. The user's own Gemini
+        // key (Settings) is the fallback when the pool is unreachable or the
+        // user is not signed in. The fetch runs on a worker thread (≤9 s) so
+        // the call screen never freezes.
+        thread(isDaemon = true) {
+            val pooled = runCatching {
+                kotlinx.coroutines.runBlocking {
+                    kotlinx.coroutines.withTimeoutOrNull(9_000) { worker?.liveKey() }
+                }
+            }.getOrNull()
+            val key = pooled ?: store.apiKey(Provider.GEMINI)
+            if (key == null) {
+                running = false
+                setCommMode(false)
+                onUnavailable?.invoke("Add your Google Gemini API key in Settings to use the real voice (or sign in so the pooled key can be used).")
+                return@thread
+            }
+            // The user may have ended the call while the key was being fetched.
+            if (!running) { setCommMode(false); return@thread }
+            sessionKey = key
+            // Live models: the selected model first
+            // (default "3.8" — Gemini 3.8 Live, GA since 15 Sep 2026), then the other
+            // models in order as fallbacks. Each model is tried BADSHAH's way first
+            // (?key= + full setup), then the SDK's way (header + full setup), then
+            // bare (header + minimal setup) — every model in this list is real.
+            val selected = LiveModels.fromKey(store.liveModelKey)
+            // The model that worked last time connects first (fast connect), then the
+            // selected model, then the rest — every model in this list is real.
+            val lastWorking = store.liveModel?.let { LiveModels.fromModelId(it) }
+            val ordered = (listOfNotNull(lastWorking, selected) + LiveModels.all).distinctBy { it.key }
+            attempts = ordered.flatMap { m ->
+                listOf(Attempt(m.modelId, 0, m.version), Attempt(m.modelId, 1, m.version), Attempt(m.modelId, 3, m.version))
+            }
+            connect(key, attempts[0])
         }
-        connect(key, attempts[0])
     }
 
     /** A connect attempt failed before the session was ready: try the next attempt (model/setup variant), or give up with the real reason. */
@@ -149,17 +176,27 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
                 nextOrFail(key, "Live connection did not start in 15 seconds (model: ${att.model}). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.")
             }
         }
-        val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${att.version}.GenerativeService.BidiGenerateContent"
-        // Auth goes in the x-goog-api-key HEADER — exactly as Google's official
-        // google-genai SDK sends it (verified live 2026-11-26: setupComplete in
-        // 1.4 s). With ?key= in the URL the server accepts the socket but NEVER
-        // completes the session for gemini-3.8-live (silent 60 s+, both keys,
-        // every setup shape) — that is why the call never connected.
-        ws = client.newWebSocket(Request.Builder().url(url)
-            .addHeader("x-goog-api-key", key)
+        // Auth: level 0 is BADSHAH's exact way — the key in the ?key= URL
+        // (the BADSHAH web app's Live connects this way on the phone and
+        // speaks first). Levels 1/3 are the official SDK's way — the key in
+        // the x-goog-api-key header. Both are verified to complete setup
+        // (2026-11-26, raw client through the proxy: ?key=, header, and both
+        // together all reached setupComplete). The ladder tries BADSHAH's way
+        // first, then the SDK's way, so either path can save the call.
+        // Extra headers (x-goog-api-client + Origin) match what the SDK and a
+        // browser send, so carrier middleboxes see a familiar handshake.
+        val baseUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${att.version}.GenerativeService.BidiGenerateContent"
+        val reqBuilder = Request.Builder()
             .addHeader("Content-Type", "application/json")
             .addHeader("User-Agent", "RANI-AI-GF/1.0 (Android)")
-            .build(), object : WebSocketListener() {
+            .addHeader("x-goog-api-client", "google-genai-sdk/3.6.1 gl-python/3.12.3")
+            .addHeader("Origin", "https://badshah222-ai.pages.dev")
+        if (att.level == 0) {
+            reqBuilder.url("$baseUrl?key=${java.net.URLEncoder.encode(key, "UTF-8")}")
+        } else {
+            reqBuilder.url(baseUrl).addHeader("x-goog-api-key", key)
+        }
+        ws = client.newWebSocket(reqBuilder.build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) { sendSetup(att) }
             override fun onMessage(webSocket: WebSocket, text: String) { handleMessage(text) }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -181,12 +218,14 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
 
     private fun sendSetup(att: Attempt) {
         val voice = store.liveVoiceName
-        if (att.level == 0) {
-            // The official google-genai SDK's EXACT working setup (verified live
-            // 2026-11-26: setupComplete in 1.4 s, RANI spoke first). Note the
-            // mixed casing — camelCase at the top, snake_case inside speechConfig —
-            // and role:"user" on the system instruction. No contextWindowCompression
-            // and no sessionResumption unless resuming (the SDK omits both).
+        if (att.level != 3) {
+            // Full setup — used by level 0 (BADSHAH's ?key= way) and level 1
+            // (the SDK's header way). The official google-genai SDK's EXACT
+            // working setup (verified live 2026-11-26: setupComplete in 1.4 s,
+            // RANI spoke first). Note the mixed casing — camelCase at the top,
+            // snake_case inside speechConfig — and role:"user" on the system
+            // instruction. No contextWindowCompression and no sessionResumption
+            // unless resuming (the SDK omits both).
             // The extended-thinking model REQUIRES thinkingLevel HIGH (the server
             // closes 1007 without it); plain 3.8-live REJECTS it (1007 the other way).
             val gen = JSONObject()
@@ -212,6 +251,7 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
         }
         // Backup variant (level 3 = bare SDK shape, no system instruction): only used
         // if the full setup is ever rejected, so the ladder still has somewhere to go.
+        // The speak-first greeting still tells RANI who she is (see setupComplete).
         val gen = JSONObject()
             .put("responseModalities", JSONArray().put("AUDIO"))
             .put("speechConfig", JSONObject().put("voice_config",

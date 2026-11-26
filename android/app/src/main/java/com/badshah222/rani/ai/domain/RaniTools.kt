@@ -12,6 +12,7 @@ object RaniTools {
     /** (name, ask-prompt shown to the user, Gemini prompt template with {x}). */
     val aiTools = listOf(
         AiTool("Generate Image", "Is description par ek image banao:", "Generate an image: {x}"),
+        AiTool("Generate Video", "Kaisi video chahiye? (scene describe karo — video banne mein kuch minutes lagte hain)", "Generate a video: {x}"),
         AiTool("Summarize Text", "Jis text ko summarize karna hai wo paste karo:", "Summarize this text briefly:\n{x}"),
         AiTool("Translate", "Kya translate karna hai? (language bhi likho, jaise 'Hindi to English: ...')", "Translate: {x}"),
         AiTool("Write Code", "Kaunsa code chahiye? (language + kya karna hai)", "Write code for: {x}"),

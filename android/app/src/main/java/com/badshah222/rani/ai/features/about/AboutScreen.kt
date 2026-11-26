@@ -68,7 +68,7 @@ fun AboutScreen(onBack: () -> Unit) {
                 }
             }
             item { Text("RANI AI GF — BADSHAH222", Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = Mute, style = MaterialTheme.typography.bodySmall) }
-            item { Text("Version 1.0.0", Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = Mute, style = MaterialTheme.typography.bodySmall) }
+            item { Text("Version ${com.badshah222.rani.ai.BuildConfig.VERSION_NAME}", Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = Mute, style = MaterialTheme.typography.bodySmall) }
         }
     }
 }

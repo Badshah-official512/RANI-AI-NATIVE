@@ -17,11 +17,13 @@ package com.badshah222.rani.ai.domain
  *
  * SDK VERIFICATION 2026-11-26 (the fix that finally made the call connect):
  * the official google-genai SDK (Python) connects on v1beta in 1.4 s with the
- * SAME key the app uses. The two things that matter, both copied into
- * LiveSession: (1) the API key goes in the `x-goog-api-key` HEADER, never in
- * a `?key=` URL param — with ?key= the server accepts the socket but NEVER
- * sends setupComplete for gemini-3.8-live (silent 60 s+, both keys, every
- * setup shape, v1beta AND v1alpha); (2) the setup is the SDK's exact shape —
+ * SAME key the app uses. CORRECTION (same day, raw-client variant tests):
+ * ?key= in the URL ALSO completes setup — the earlier "silent 60 s+" was the
+ * VM's direct (non-proxy) network path going silent for Live, not the auth
+ * method. Through the proxy, ?key=, header auth, and both together ALL reached
+ * setupComplete (variants V1–V6). So the app tries BADSHAH's way first
+ * (?key=, exactly like the BADSHAH web app's Live on the phone), then the
+ * SDK's way (x-goog-api-key header). The setup is the SDK's exact shape —
  * camelCase on top, snake_case inside speechConfig, role:"user" on the system
  * instruction, no contextWindowCompression/sessionResumption unless resuming.
  * The extended-thinking model REQUIRES thinkingLevel HIGH (server closes 1007
