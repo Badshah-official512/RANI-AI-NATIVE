@@ -78,7 +78,9 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
      *  phone CAN reach the BADSHAH Worker reliably, and the Worker (Cloudflare
      *  edge) CAN reach Google Live — verified end-to-end 2026-11-26 (setupComplete
      *  in 0.2 s, RANI spoke). So attempt #1 is always the Worker proxy
-     *  (wss://badshah222-ai.pages.dev/api/live, key in X-Gemini-Key header);
+     *  (wss://badshah222-ai.pages.dev/api/live, key in ?key=, browser-identical
+     *  handshake — v1.2.1, after v1.2.0's X-Gemini-Key header was also dropped
+     *  silently by the phone's path);
      *  the direct ladder below is the fallback if the proxy ever fails. */
     private data class Attempt(val model: String, val level: Int, val version: String, val proxy: Boolean = false)
     private var attempts: List<Attempt> = emptyList()
@@ -191,16 +193,28 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
         }
         // PROXY (att.proxy): the Worker relay at badshah222-ai.pages.dev/api/live.
         // The phone reaches Cloudflare reliably; Cloudflare reaches Google Live.
-        // Key goes in the X-Gemini-Key header; the Worker opens the upstream
-        // socket with ?key= (BADSHAH's way) and relays every frame untouched.
-        // The handshake is kept browser-clean (no Content-Type, no SDK client
-        // header) so nothing in the path can mistake it for a non-browser client.
+        // v1.2.1 — BROWSER-IDENTICAL HANDSHAKE: v1.2.0's proxy attempt ALSO failed
+        // on the phone (full ladder ran, every attempt "did not start in 15 seconds",
+        // key saved + valid, gemini-3.8-live offered — Settings 2026-11-26 20:06 PKT).
+        // The browser's WebSocket works on the same phone + network, OkHttp's does
+        // not — to BOTH Google and Cloudflare, on BOTH 4G and WiFi. The only
+        // difference is the upgrade request itself: v1.2.0 sent non-browser
+        // headers (X-Gemini-Key on the proxy; Content-Type + custom UA +
+        // x-goog-api-client on direct), which a middlebox can flag and silently
+        // drop (a silent 15 s hang, never an error). So this handshake sends
+        // NOTHING a Chrome browser would not send: the key travels in ?key=
+        // (the Worker accepts it; BADSHAH's web app authenticates the same way),
+        // and every header is one Chrome sends on a WebSocket upgrade.
+        // No custom header, no Content-Type, no SDK client string, no app UA.
         if (att.proxy) {
             val reqBuilder = Request.Builder()
-                .url("wss://badshah222-ai.pages.dev/api/live")
-                .addHeader("X-Gemini-Key", key)
-                .addHeader("Origin", "https://badshah222-ai.pages.dev")
+                .url("wss://badshah222-ai.pages.dev/api/live?key=${java.net.URLEncoder.encode(key, "UTF-8")}")
                 .addHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14; TECNO KM4k) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
+                .addHeader("Origin", "https://badshah222-ai.pages.dev")
+                .addHeader("Accept-Language", "en-US,en;q=0.9")
+                .addHeader("Accept-Encoding", "gzip, deflate, br, zstd")
+                .addHeader("Cache-Control", "no-cache")
+                .addHeader("Pragma", "no-cache")
             ws = client.newWebSocket(reqBuilder.build(), liveListener(key, att, tok))
             return
         }
@@ -211,14 +225,19 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
         // (2026-11-26, raw client through the proxy: ?key=, header, and both
         // together all reached setupComplete). The ladder tries BADSHAH's way
         // first, then the SDK's way, so either path can save the call.
-        // Extra headers (x-goog-api-client + Origin) match what the SDK and a
-        // browser send, so carrier middleboxes see a familiar handshake.
+        // v1.2.1: the upgrade request is browser-identical on every level —
+        // Chrome UA + Origin + the headers Chrome sends, and NO Content-Type,
+        // NO x-goog-api-client, NO app UA (see the proxy note above — those
+        // non-browser headers are what the middlebox flags). Levels 1/3 keep
+        // only x-goog-api-key, which that auth method cannot do without.
         val baseUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${att.version}.GenerativeService.BidiGenerateContent"
         val reqBuilder = Request.Builder()
-            .addHeader("Content-Type", "application/json")
-            .addHeader("User-Agent", "RANI-AI-GF/1.0 (Android)")
-            .addHeader("x-goog-api-client", "google-genai-sdk/3.6.1 gl-python/3.12.3")
+            .addHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14; TECNO KM4k) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
             .addHeader("Origin", "https://badshah222-ai.pages.dev")
+            .addHeader("Accept-Language", "en-US,en;q=0.9")
+            .addHeader("Accept-Encoding", "gzip, deflate, br, zstd")
+            .addHeader("Cache-Control", "no-cache")
+            .addHeader("Pragma", "no-cache")
         if (att.level == 0) {
             reqBuilder.url("$baseUrl?key=${java.net.URLEncoder.encode(key, "UTF-8")}")
         } else {
