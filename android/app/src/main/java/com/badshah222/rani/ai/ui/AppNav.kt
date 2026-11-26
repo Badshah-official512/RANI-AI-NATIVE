@@ -12,6 +12,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.badshah222.rani.ai.MainActivity
 import com.badshah222.rani.ai.features.about.AboutScreen
 import com.badshah222.rani.ai.features.camera.CameraViewScreen
 import com.badshah222.rani.ai.features.camera.CameraViewModel
@@ -89,6 +90,17 @@ fun AppNav(activity: Activity) {
 @Composable
 private fun SignedInNav(session: SessionViewModel) {
     val nav = rememberNavController()
+    // v1.4.0 — floating orb tap ("G Babu" wake) opens the voice call ON TOP of
+    // the screen, BADSHAH-style: the orb sends EXTRA_WAKE, MainActivity sets
+    // wakeVoiceFlow, and the app navigates straight to the call screen instead
+    // of home. Reset after navigating so it fires once per tap.
+    val wakeVoice by MainActivity.wakeVoiceFlow.collectAsState()
+    LaunchedEffect(wakeVoice) {
+        if (wakeVoice) {
+            MainActivity.wakeVoiceFlow.value = false
+            nav.navigate("voice") { launchSingleTop = true }
+        }
+    }
     // ViewModels are created here (nav-graph scope) so Home state survives opening Settings/Help.
     val home: HomeViewModel = viewModel(); val settings: SettingsViewModel = viewModel(); val help: HelpViewModel = viewModel(); val history: HistoryViewModel = viewModel(); val browser: BrowserViewModel = viewModel(); val screen: ScreenViewModel = viewModel(); val secret: SecretChatViewModel = viewModel(); val contacts: ContactsViewModel = viewModel()
     val tools: AiToolsViewModel = viewModel(); val webforge: WebForgeViewModel = viewModel(); val coder: CoderViewModel = viewModel()

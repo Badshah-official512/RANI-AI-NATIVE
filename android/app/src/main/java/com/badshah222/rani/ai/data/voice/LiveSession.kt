@@ -389,8 +389,14 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
                 _level.value = (Math.sqrt(sum / (n / 2)) / 9000.0).toFloat().coerceIn(0f, 1f)
                 if (muted.value) continue
                 val chunk = Base64.encodeToString(buf.copyOf(n), Base64.NO_WRAP)
+                // v1.4.0 — BADSHAH's exact mic format: realtimeInput.mediaChunks
+                // (an array of {mimeType, data}). The old realtimeInput.audio
+                // object was never heard by the server — RANI could not hear
+                // Babu Jaan, so no conversation ever started even when the
+                // socket connected. BADSHAH's rani-voice.js + rani-live.html
+                // both send mediaChunks; the native engine must match.
                 val msg = JSONObject().put("realtimeInput",
-                    JSONObject().put("audio", JSONObject().put("mimeType", "audio/pcm;rate=16000").put("data", chunk)))
+                    JSONObject().put("mediaChunks", JSONArray().put(JSONObject().put("mimeType", "audio/pcm;rate=16000").put("data", chunk))))
                 ws?.send(msg.toString())
             }
         }

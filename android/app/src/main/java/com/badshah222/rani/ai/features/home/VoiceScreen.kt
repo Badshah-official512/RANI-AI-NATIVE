@@ -65,37 +65,18 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     val liveError by vm.live.error.collectAsState(); val muted by vm.live.muted.collectAsState()
     val attemptInfo by vm.live.attemptInfo.collectAsState(); val liveLastError by vm.live.lastError.collectAsState()
     val fallback by vm.liveFallback.collectAsState()
-    val liveWebUrl by vm.liveWebUrl.collectAsState()
     val emotion by vm.emotion.collectAsState()
     val inCall by vm.inCall.collectAsState(); val callMuted by vm.callMuted.collectAsState()
-
-    // v1.3.2 — BADSHAH-style call, INSIDE the app: when the web Live URL is set,
-    // the call runs in the app's own WebView (the RANI Live page), exactly like
-    // BADSHAH AI's WebView. Chrome never opens. The page IS the call screen.
-    if (liveWebUrl != null) {
-        RaniLiveWebView(
-            url = liveWebUrl!!,
-            onCallEnded = { vm.stopLiveWeb(); onBack() },
-            // BADSHAH's MainActivity falls back on a page-load error; RANI falls
-            // back to classic mode — a page that never loads is no call at all,
-            // so there is nothing to keep the user on. (v1.3.2 left this a no-op
-            // and a failed load stranded the user on a blank/error WebView.)
-            onLoadError = {
-                vm.stopLiveWeb()
-                vm.liveFallback.value = "The RANI Live page could not load — check the internet and try the call again."
-            }
-        )
-        return
-    }
 
     var liveMode by remember { mutableStateOf(vm.liveAvailable()) }
     var started by remember { mutableStateOf(false) }
 
     fun begin() {
         if (started) return; started = true
-        // v1.3.2: Live goes through the in-app WebView (browser WebSocket). The
-        // native LiveSession stays only as the Settings-test / fallback engine.
-        if (liveMode) vm.requestLiveWeb() else vm.requestCall()
+        // v1.4.0 — NATIVE call only (boss's order: no web page). The Live call
+        // runs on the native Java-WebSocket engine (LiveSession) — a raw socket
+        // inside the APK, no web page at all. The WebView path is removed.
+        if (liveMode) vm.startLiveSession() else vm.requestCall()
     }
     val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) begin() else vm.status.value = "Microphone permission denied. Open Permissions to enable it."

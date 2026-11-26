@@ -59,7 +59,6 @@ import com.badshah222.rani.ai.ui.theme.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import java.net.URLEncoder
 
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private val c = (app as RaniApp).container
@@ -196,53 +195,21 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { if (voiceGateOk()) { beginCall(); startListening() } }
     }
 
-    // ---- Gemini Live via the BADSHAH-style web page (v1.3.2) ----
-    /** The RANI Live page URL for the in-app WebView call — null when no web call is active. */
-    val liveWebUrl = MutableStateFlow<String?>(null)
-    /** Start the Live call INSIDE the app, BADSHAH-style: the in-app WebView loads
-     *  the RANI Live page, which opens a plain `new WebSocket` to Google Live.
-     *  BADSHAH AI's call runs in its own WebView — Chrome never opens there, and
-     *  it never opens here either (v1.3.1's Chrome Intent is removed). Resolves
-     *  the key exactly like LiveSession does (pooled first, own key fallback).
-     *  v1.3.2 fix: the WebView is created + loaded inside AndroidView's factory
-     *  (BADSHAH AI's way) — v1.3.0 loaded it in remember() before attachment
-     *  and the page stayed blank white. Boss's order: ONLY gemini-3.8-live, one request. */
-    fun requestLiveWeb() {
-        liveFallback.value = null
-        viewModelScope.launch {
-            val pooled = runCatching { withTimeoutOrNull(9_000) { c.worker?.liveKey() } }.getOrNull()
-            val key = pooled ?: c.store.apiKey(Provider.GEMINI)
-            if (key == null) {
-                liveFallback.value = "Add your Google Gemini API key in Settings to use the real voice (or sign in so the pooled key can be used)."
-                return@launch
-            }
-            val voice = c.store.liveVoiceName
-            val model = LiveModels.fromKey(LiveModels.DEFAULT_KEY).modelId // gemini-3.8-live
-            val v = com.badshah222.rani.ai.BuildConfig.VERSION_NAME
-            val url = "https://badshah222-ai.pages.dev/rani-live" +
-                "?key=" + URLEncoder.encode(key, "UTF-8") +
-                "&voice=" + URLEncoder.encode(voice, "UTF-8") +
-                "&model=" + URLEncoder.encode(model, "UTF-8") +
-                "&v=" + URLEncoder.encode(v, "UTF-8")
-            liveWebUrl.value = url
-        }
-    }
-    fun stopLiveWeb() { liveWebUrl.value = null }
-
-    // ---- Gemini Live (real human voice) ----
+    // ---- Gemini Live (real human voice) — NATIVE, no web page (v1.4.0) ----
     val live = c.live
     val liveFallback = MutableStateFlow<String?>(null)
     /** Live is available when enabled AND there is any key source: the user's own
      *  Gemini key, OR a Firebase sign-in (the pooled key via /api/live-key —
      *  BADSHAH's way: a BADSHAH AI account signs into RANI and needs no own key).
      *  Requiring only the own key here blocked the pooled-key call for signed-in
-     *  users — the WebView path (requestLiveWeb) already handles pooled-first. */
+     *  users. */
     fun liveAvailable(): Boolean = c.store.liveEnabled && (c.store.apiKey(Provider.GEMINI) != null || c.auth.current != null)
-    /** Native LiveSession entry — the FALLBACK engine only (the WebView call is
-     *  primary; classic mode is the user-visible fallback). Not wired to the call
-     *  screen: the native socket engines hung on this phone, so the call screen
-     *  uses the WebView and falls back to classic. Kept for the Settings Live
-     *  test path and for a future engine swap. */
+    /** Native LiveSession entry — the PRIMARY call engine (v1.4.0, boss's order:
+     *  no web page). The call runs on the native Java-WebSocket engine (raw
+     *  socket, plain HTTP/1.1 upgrade, browser-identical handshake, ?key=,
+     *  single attempt gemini-3.8-live via the Worker proxy). The WebView call
+     *  path is removed — the call never opens a web page. If Live cannot run,
+     *  liveFallback fires and the call screen falls back to classic mode. */
     fun startLiveSession() {
         liveFallback.value = null
         viewModelScope.launch {
