@@ -48,7 +48,7 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
     private val _userText = MutableStateFlow(""); val userText: StateFlow<String> = _userText
     private val _assistantText = MutableStateFlow(""); val assistantText: StateFlow<String> = _assistantText
     private val _error = MutableStateFlow<String?>(null); val error: StateFlow<String?> = _error
-    /** What the engine is trying right now ("Trying gemini-3.1-flash-live-preview · attempt 1 of 8") — shown on the call screen so a stuck call never looks silent. */
+    /** What the engine is trying right now ("Trying gemini-3.8-live · attempt 1 of 6") — shown on the call screen so a stuck call never looks silent. */
     private val _attemptInfo = MutableStateFlow(""); val attemptInfo: StateFlow<String> = _attemptInfo
     /** The last server/network reason a Live attempt failed — shown on the call screen and in Settings. */
     private val _lastError = MutableStateFlow<String?>(null); val lastError: StateFlow<String?> = _lastError
@@ -106,9 +106,9 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
         sessionStartedAtMs = System.currentTimeMillis()
         _error.value = null; _userText.value = ""; _assistantText.value = ""
         setCommMode(true)
-        // MYRA Live models (aria.py LIVE_MODELS): the selected model first
-        // (default "3.1" — Gemini 3.1 Flash Live), then the other MYRA models
-        // in MYRA's order as fallbacks. Each model is tried with the full
+        // Live models: the selected model first
+        // (default "3.8" — Gemini 3.8 Live, GA since 15 Sep 2026), then the other
+        // models in order as fallbacks. Each model is tried with the full
         // setup first, then a bare setup (native-audio models reject some fields).
         val selected = LiveModels.fromKey(store.liveModelKey)
         // The model that worked last time connects first (fast connect), then the
@@ -140,12 +140,13 @@ class LiveSession(private val context: Context, private val store: SecureStore) 
         _state.value = State.Connecting
         setupDone = false
         // Watchdog: a hung handshake must never leave the screen on "Connecting…" forever.
+        // 15 s — the boss's 4G is slow, so a working model gets room to finish its setup.
         _attemptInfo.value = "Trying ${att.model} · attempt ${attempt + 1} of ${attempts.size}"
         val tok = ++attemptToken
         thread(isDaemon = true) {
-            Thread.sleep(10000)
+            Thread.sleep(15000)
             if (running && !setupDone && tok == attemptToken) {
-                nextOrFail(key, "Live connection did not start in 10 seconds (model: ${att.model}). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.")
+                nextOrFail(key, "Live connection did not start in 15 seconds (model: ${att.model}). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.")
             }
         }
         val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.${att.version}.GenerativeService.BidiGenerateContent?key=$key"

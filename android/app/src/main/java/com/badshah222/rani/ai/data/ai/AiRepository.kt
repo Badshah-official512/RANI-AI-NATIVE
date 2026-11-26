@@ -28,10 +28,10 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
     }
 
     /**
-     * Detects which MYRA Live model this key offers — MYRA's order (aria.py
-     * LIVE_MODELS): 3.1 Flash Live first (MYRA's default), then 2.5 Flash
-     * Native Audio, 2.5 Native Audio (Dec 2025 Preview), then 3.8 Live.
-     * Stores both the MYRA key (e.g. "3.1") and the model id. Returns the
+     * Detects which Live model this key offers — new order (Nov 2026):
+     * 3.8 Live first (the default), then 3.8 Live Extended Thinking,
+     * then 2.5 Flash Native Audio (GA).
+     * Stores both the model key (e.g. "3.8") and the model id. Returns the
      * model id, or null when the key offers no Live model — the app then
      * uses the classic voice mode.
      */

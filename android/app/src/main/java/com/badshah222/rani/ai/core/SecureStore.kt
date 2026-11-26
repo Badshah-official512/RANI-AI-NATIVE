@@ -81,8 +81,8 @@ class SecureStore(context: Context) {
     var avatarChoice: String get() = prefs.getString("avatar", "girl") ?: "girl"; set(v) = prefs.edit().putString("avatar", v).apply()
 
     // ---- MYRA Live model choice (aria.py LIVE_MODELS) ----
-    /** MYRA Live model key: "3.1" (default) | "native" | "native-dec" | "3.8". */
-    var liveModelKey: String get() = prefs.getString("live_model_key", "3.1") ?: "3.1"; set(v) = prefs.edit().putString("live_model_key", v).apply()
+    /** Live model key: "3.8" (default) | "3.8-thinking" | "native-ga". */
+    var liveModelKey: String get() = prefs.getString("live_model_key", "3.8") ?: "3.8"; set(v) = prefs.edit().putString("live_model_key", v).apply()
 
     // ---- MYRA VoicePage: listen modes + mic ----
     /** wake | tap | continuous | stop (MYRA ModeBar). Default tap-to-talk. */
