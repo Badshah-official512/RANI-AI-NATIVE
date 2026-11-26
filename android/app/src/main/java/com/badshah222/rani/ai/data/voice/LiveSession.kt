@@ -71,8 +71,16 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
      *  (?key= in the URL + full SDK setup), 1 = the official SDK's way (x-goog-api-key
      *  header + full setup), 3 = header + bare setup (for models that reject fields).
      *  Both auth methods are proven to connect (verified live 2026-11-26); the ladder
-     *  tries them in order so a phone that dislikes one still connects on the other. */
-    private data class Attempt(val model: String, val level: Int, val version: String)
+     *  tries them in order so a phone that dislikes one still connects on the other.
+     *  PROXY FIRST (2026-11-26, v1.2.0): the phone's OkHttp WebSocket cannot hold a
+     *  direct socket to Google Live — it is aborted / hangs on both 4G and WiFi,
+     *  while the browser's WebSocket works fine on the same phone and key. The
+     *  phone CAN reach the BADSHAH Worker reliably, and the Worker (Cloudflare
+     *  edge) CAN reach Google Live — verified end-to-end 2026-11-26 (setupComplete
+     *  in 0.2 s, RANI spoke). So attempt #1 is always the Worker proxy
+     *  (wss://badshah222-ai.pages.dev/api/live, key in X-Gemini-Key header);
+     *  the direct ladder below is the fallback if the proxy ever fails. */
+    private data class Attempt(val model: String, val level: Int, val version: String, val proxy: Boolean = false)
     private var attempts: List<Attempt> = emptyList()
     @Volatile private var attempt = 0
     @Volatile private var attemptToken = 0
@@ -141,9 +149,13 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
             // selected model, then the rest — every model in this list is real.
             val lastWorking = store.liveModel?.let { LiveModels.fromModelId(it) }
             val ordered = (listOfNotNull(lastWorking, selected) + LiveModels.all).distinctBy { it.key }
-            attempts = ordered.flatMap { m ->
-                listOf(Attempt(m.modelId, 0, m.version), Attempt(m.modelId, 1, m.version), Attempt(m.modelId, 3, m.version))
-            }
+            // Attempt #1 is ALWAYS the Worker proxy (see Attempt doc) — the phone
+            // reaches Cloudflare reliably, Cloudflare reaches Google Live. The
+            // direct ladder below is only the fallback if the proxy ever fails.
+            attempts = listOf(Attempt(selected.modelId, 0, selected.version, proxy = true)) +
+                ordered.flatMap { m ->
+                    listOf(Attempt(m.modelId, 0, m.version), Attempt(m.modelId, 1, m.version), Attempt(m.modelId, 3, m.version))
+                }
             connect(key, attempts[0])
         }
     }
@@ -168,13 +180,29 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
         setupDone = false
         // Watchdog: a hung handshake must never leave the screen on "Connecting…" forever.
         // 15 s — the boss's 4G is slow, so a working model gets room to finish its setup.
-        _attemptInfo.value = "Trying ${att.model} · attempt ${attempt + 1} of ${attempts.size}"
+        _attemptInfo.value = if (att.proxy) "Trying ${att.model} via Cloudflare · attempt ${attempt + 1} of ${attempts.size}"
+            else "Trying ${att.model} · attempt ${attempt + 1} of ${attempts.size}"
         val tok = ++attemptToken
         thread(isDaemon = true) {
             Thread.sleep(15000)
             if (running && !setupDone && tok == attemptToken) {
                 nextOrFail(key, "Live connection did not start in 15 seconds (model: ${att.model}). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.")
             }
+        }
+        // PROXY (att.proxy): the Worker relay at badshah222-ai.pages.dev/api/live.
+        // The phone reaches Cloudflare reliably; Cloudflare reaches Google Live.
+        // Key goes in the X-Gemini-Key header; the Worker opens the upstream
+        // socket with ?key= (BADSHAH's way) and relays every frame untouched.
+        // The handshake is kept browser-clean (no Content-Type, no SDK client
+        // header) so nothing in the path can mistake it for a non-browser client.
+        if (att.proxy) {
+            val reqBuilder = Request.Builder()
+                .url("wss://badshah222-ai.pages.dev/api/live")
+                .addHeader("X-Gemini-Key", key)
+                .addHeader("Origin", "https://badshah222-ai.pages.dev")
+                .addHeader("User-Agent", "Mozilla/5.0 (Linux; Android 14; TECNO KM4k) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
+            ws = client.newWebSocket(reqBuilder.build(), liveListener(key, att, tok))
+            return
         }
         // Auth: level 0 is BADSHAH's exact way — the key in the ?key= URL
         // (the BADSHAH web app's Live connects this way on the phone and
@@ -196,7 +224,11 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
         } else {
             reqBuilder.url(baseUrl).addHeader("x-goog-api-key", key)
         }
-        ws = client.newWebSocket(reqBuilder.build(), object : WebSocketListener() {
+        ws = client.newWebSocket(reqBuilder.build(), liveListener(key, att, tok))
+    }
+
+    /** The shared WebSocket listener for proxy and direct attempts. */
+    private fun liveListener(key: String, att: Attempt, tok: Int) = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) { sendSetup(att) }
             override fun onMessage(webSocket: WebSocket, text: String) { handleMessage(text) }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -213,8 +245,7 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
                 if (setupDone && reconnects < 8 && code != 1008) { reconnects++; if (running) connect(key, att) }
                 else if (code == 1008 || code == 1007) fail("The live voice was refused for this key or model. Open Settings → Live Voice and press Test to pick a working model.")
             }
-        })
-    }
+        }
 
     private fun sendSetup(att: Attempt) {
         val voice = store.liveVoiceName
