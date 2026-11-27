@@ -240,16 +240,18 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
             // Full setup — used by level 0 (BADSHAH's ?key= way) and level 1
             // (the SDK's header way). The official google-genai SDK's EXACT
             // working setup (verified live 2026-11-26: setupComplete in 1.4 s,
-            // RANI spoke first). Note the mixed casing — camelCase at the top,
-            // snake_case inside speechConfig — and role:"user" on the system
+            // RANI spoke first). Note the casing — camelCase throughout,
+            // including inside speechConfig (voiceConfig / prebuiltVoiceConfig /
+            // voiceName) — BADSHAH's app.html proves this shape; the snake_case
+            // form (v1.6.0) never got setupComplete. Role:"user" on the system
             // instruction. No contextWindowCompression and no sessionResumption
             // unless resuming (the SDK omits both).
             // The extended-thinking model REQUIRES thinkingLevel HIGH (the server
             // closes 1007 without it); plain 3.8-live REJECTS it (1007 the other way).
             val gen = JSONObject()
                 .put("responseModalities", JSONArray().put("AUDIO"))
-                .put("speechConfig", JSONObject().put("voice_config",
-                    JSONObject().put("prebuilt_voice_config", JSONObject().put("voice_name", voice))))
+                .put("speechConfig", JSONObject().put("voiceConfig",
+                    JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice))))
             if (LiveModels.fromModelId(att.model)?.thinking == true) {
                 gen.put("thinkingConfig", JSONObject().put("thinkingLevel", "HIGH"))
             }
@@ -272,8 +274,8 @@ class LiveSession(private val context: Context, private val store: SecureStore, 
         // The speak-first greeting still tells RANI who she is (see setupComplete).
         val gen = JSONObject()
             .put("responseModalities", JSONArray().put("AUDIO"))
-            .put("speechConfig", JSONObject().put("voice_config",
-                JSONObject().put("prebuilt_voice_config", JSONObject().put("voice_name", voice))))
+            .put("speechConfig", JSONObject().put("voiceConfig",
+                JSONObject().put("prebuiltVoiceConfig", JSONObject().put("voiceName", voice))))
         if (LiveModels.fromModelId(att.model)?.thinking == true) {
             gen.put("thinkingConfig", JSONObject().put("thinkingLevel", "HIGH"))
         }

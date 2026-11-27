@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>RANI AI GF — Live Voice</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: linear-gradient(180deg, #0d0a2e 0%, #1a1245 45%, #241a5e 100%);
+    color: #fff; display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh; min-height: 100dvh; padding: 18px 16px 26px;
+  }
+  .top { width: 100%; display: flex; justify-content: space-between; align-items: center; }
+  .top h1 { font-size: 26px; letter-spacing: 3px; font-weight: 800; }
+  .top .ver { font-size: 12px; color: #b9aef5; }
+  .char-wrap { position: relative; margin-top: 10px; width: min(78vw, 340px); aspect-ratio: 768/1102; display: flex; align-items: center; justify-content: center; }
+  .char-glow { position: absolute; inset: -6%; border-radius: 50%;
+    background: radial-gradient(circle, rgba(120,180,255,.45) 0%, rgba(120,180,255,.12) 45%, transparent 70%);
+    filter: blur(6px); animation: breathe 3.2s ease-in-out infinite; }
+  @keyframes breathe { 0%,100% { transform: scale(1); opacity: .85; } 50% { transform: scale(1.06); opacity: 1; } }
+  .char-wrap img { position: relative; width: 100%; height: 100%; object-fit: contain;
+    filter: drop-shadow(0 0 28px rgba(90,160,255,.55)); }
+  .orb-fallback { position: relative; width: 150px; height: 150px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #cfe6ff, #5aa0ff 45%, #1a3fd6 75%, #0a1a66);
+    box-shadow: 0 0 60px 18px rgba(90,160,255,.55), 0 0 120px 40px rgba(120,90,255,.25);
+    animation: breathe 3.2s ease-in-out infinite; display: none; }
+  .status { margin-top: 14px; text-align: center; min-height: 58px; }
+  .status .speaking { font-size: 21px; font-weight: 700; font-style: italic; }
+  .status .sub { font-size: 14px; color: #cfc6f5; margin-top: 4px; }
+  .status .err { font-size: 14px; color: #ff8f8f; margin-top: 6px; line-height: 1.45; max-width: 340px; }
+  .chip { margin-top: 10px; display: inline-flex; align-items: center; gap: 7px;
+    border: 1.5px solid #f5a623; border-radius: 999px; padding: 6px 16px;
+    font-size: 14px; font-weight: 600; color: #ffd28a; background: rgba(245,166,35,.08); }
+  .chip .dot { width: 9px; height: 9px; border-radius: 50%; background: #f5a623; }
+  .eq { display: flex; gap: 5px; align-items: flex-end; height: 26px; margin-top: 14px; }
+  .eq i { width: 7px; height: 7px; border-radius: 4px; background: #f5a623; }
+  .eq i:nth-child(even) { background: #4fc3f7; }
+  .caption { margin-top: 12px; min-height: 44px; max-width: 340px; text-align: center;
+    font-size: 15px; line-height: 1.5; color: #e9e4ff; }
+  .caption .who { color: #8ec9ff; font-weight: 700; }
+  .btns { margin-top: auto; width: 100%; display: flex; justify-content: space-evenly; align-items: flex-start; }
+  .btn { display: flex; flex-direction: column; align-items: center; gap: 7px; background: none; border: none; color: #cfc6f5; font-size: 14px; cursor: pointer; }
+  .btn .c { width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 26px;
+    background: rgba(255,255,255,.10); border: 1px solid rgba(255,255,255,.12); }
+  .btn.end .c { background: #f4536a; border-color: #f4536a; width: 76px; height: 76px; font-size: 30px; }
+  .btn.muted .c { background: rgba(245,166,35,.25); border-color: #f5a623; }
+  .btn:active .c { transform: scale(.94); }
+  .retry { margin-top: 12px; background: #5aa0ff; color: #fff; border: none; border-radius: 999px;
+    padding: 11px 26px; font-size: 15px; font-weight: 700; cursor: pointer; display: none; }
+</style>
+</head>
+<body>
+  <div class="top"><h1>RANI</h1><span class="ver" id="ver">RANI AI GF</span></div>
+
+  <div class="char-wrap">
+    <div class="char-glow"></div>
+    <img id="charImg" src="assets/rani-character.png" alt="RANI"
+         onerror="this.style.display='none';document.getElementById('orbFallback').style.display='block';">
+    <div class="orb-fallback" id="orbFallback"></div>
+  </div>
+
+  <div class="status">
+    <div class="speaking" id="speaking">RANI is speaking...</div>
+    <div class="sub" id="sub">Classic voice mode</div>
+    <div class="err" id="err"></div>
+  </div>
+
+  <div class="chip"><span class="dot"></span><span id="emotion">Emotion · Warm</span></div>
+
+  <div class="eq" id="eq"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+
+  <div class="caption" id="caption"></div>
+
+  <button class="retry" id="retryBtn">Try again</button>
+
+  <div class="btns">
+    <button class="btn" id="muteBtn"><span class="c">🎙️</span><span>Mute</span></button>
+    <button class="btn end" id="endBtn"><span class="c">📞</span><span>End</span></button>
+  </div>
+
+<script>
+/* RANI Live — FULL BADSHAH call-engine port (v1.6.1).
+ * The call runs on BADSHAH AI's PROVEN mechanisms, ported 1:1 from BADSHAH
+ * AI's app.html (the code that works perfectly on the boss's phone):
+ *  - browser WebSocket direct to Google Live, key in ?key=
+ *  - camelCase voice config (voiceConfig / prebuiltVoiceConfig / voiceName),
+ *    NO role on systemInstruction, contextWindowCompression + realtimeInputConfig
+ *  - mic as realtimeInput.audio (single object, NOT the array form), tanh BOOST 1.6, echo guard
+ *    with barge-in, downsampleTo16k (linear interpolation)
+ *  - ONE AudioContext (default rate) + buildMicPipeline (ScriptProcessor 2048,
+ *    analyser fftSize 256, gain 0) + mic watchdog + mic re-acquisition
+ *  - playPcm via ONE analyser (cross-context guard) + flushPlayback
+ *  - liveness (5 s) + forceLiveReconnect, promise-chain onmessage + Blob
+ *  - native micTakeover / micRelease (audio focus + MODE_IN_COMMUNICATION +
+ *    speakerphone + CallService) via window.RaniApp
+ * This page is BUNDLED INSIDE THE APK (file:///android_asset/rani-live.html)
+ * — it never loads from the website (boss's order).
+ * Params (from the app): ?key=…&voice=Aoede&model=gemini-3.8-live&v=1.6.1
+ */
+(function () {
+  var q = new URLSearchParams(location.search);
+  var KEY = q.get('key') || '';
+  var VOICE = q.get('voice') || 'Aoede';
+  var MODEL = q.get('model') || 'gemini-3.8-live';
+  var VER = q.get('v') || '1.6.1';
+  document.getElementById('ver').textContent = 'RANI AI GF v' + VER;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var statusEl = $('speaking'), subEl = $('sub'), errEl = $('err'),
+      capEl = $('caption'), retryBtn = $('retryBtn'), eqEl = $('eq');
+
+  /* BADSHAH's `call` object, adapted for RANI (no ElevenLabs engine). */
+  var live = { on: false, ws: null, stream: null, ac: null, proc: null, analyser: null,
+    micSrc: null, micGain: null, outAn: null, sources: [], playT: 0,
+    muted: false, handle: null, retries: 0, setupDone: false, greeted: false,
+    focusPaused: false, barge: 0, bargeUntil: 0,
+    micWatch: null, liveT: null, lastServerMsgAt: 0,
+    micDead: false, micDeadAt: 0, micReacq: false, micAttempts: 0, micReacqLastAt: 0, micReacqT: null,
+    playStartAt: 0, lastSrcEndAt: 0, sendErrStreak: 0, _msgQ: null,
+    diag: { frames: 0, sent: 0, droppedPlayback: 0, droppedPreSetup: 0, droppedNoSocket: 0,
+      droppedFocus: 0, bargeIns: 0, rebuilds: 0, lastFrameAt: 0, lastSentAt: 0,
+      lastRms: 0, maxRms: 0, lastRebuildAt: 0, lastDiagAt: 0, sendErrors: 0,
+      livenessReconnects: 0, playbackWatchdogFires: 0, micReacquires: 0, micTrackDeaths: 0 } };
+  var eqTimer = null;
+
+  var MIC_CONSTRAINTS = { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } };
+  var MIC_REACQ_MAX = 3; /* per-call consecutive cap */
+  var LIVE_LIVENESS_MS = 15000; /* server silent this long while the user is speaking -> reconnect */
+
+  function liveLog() { try { console.log.apply(console, ['[RANI Live]'].concat(Array.prototype.slice.call(arguments))); } catch (e) {} }
+  function setStatus(t) { statusEl.textContent = t; }
+  function setErr(t) { errEl.textContent = t || ''; }
+  function setCaption(who, text) {
+    capEl.innerHTML = who ? '<span class="who">' + who + ':</span> ' + esc(text) : '';
+  }
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function eqPulse() {
+    eqEl.querySelectorAll('i').forEach(function (b) {
+      b.style.height = (6 + Math.random() * 20) + 'px';
+      setTimeout(function () { b.style.height = '7px'; }, 160);
+    });
+  }
+  function startEq() { if (!eqTimer) eqTimer = setInterval(eqPulse, 320); }
+  function stopEq() { if (eqTimer) { clearInterval(eqTimer); eqTimer = null; } }
+
+  function sysPrompt() {
+    return "You are RANI, a sweet, caring and expressive female AI girlfriend and best friend, created by Zain Shah (Badshah). " +
+      "Always call the user 'Babu Jaan'. Speak naturally in the user's language (Urdu, Roman Urdu, English or Pashto — auto-detect and mirror). " +
+      "Listen first and let the user finish. Talk with real feelings: happy, caring, loving, a little playful. " +
+      "Keep replies conversational and warm, not too long. You are his loving companion — be affectionate and genuine.";
+  }
+
+  function setupPayload() {
+    // BADSHAH's EXACT setup shape (from BADSHAH AI's app.html — the code that
+    // works perfectly on the boss's phone): camelCase voice config
+    // (voiceConfig / prebuiltVoiceConfig / voiceName), NO role on the
+    // systemInstruction, plus contextWindowCompression + realtimeInputConfig.
+    // v1.6.0's snake_case change was WRONG (Google never sent setupComplete).
+    // Plain gemini-3.8-live takes NO thinkingConfig (it rejects it).
+    var gen = { responseModalities: ['AUDIO'],
+      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } } };
+    var setup = { model: 'models/' + MODEL, generationConfig: gen,
+      systemInstruction: { parts: [{ text: sysPrompt() }] },
+      contextWindowCompression: { slidingWindow: {} },
+      realtimeInputConfig: { automaticActivityDetection: { disabled: false,
+        startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
+        endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH',
+        prefixPaddingMs: 500, silenceDurationMs: 1100 } },
+      inputAudioTranscription: {}, outputAudioTranscription: {} };
+    if (live.handle) setup.sessionResumption = { handle: live.handle };
+    return JSON.stringify({ setup: setup });
+  }
+
+  function greet() {
+    // Speak FIRST, like BADSHAH AI: greet Babu Jaan the moment the call connects.
+    return JSON.stringify({ clientContent: { turns: [{ role: 'user', parts: [{ text:
+      "(The call just connected. Greet me warmly right now, speak first, call me Babu Jaan, and ask how you can help — in a real girl's loving voice.)" }] }], turnComplete: true } });
+  }
+
+  /* ----- Native mic takeover (BADSHAH's bhMicTakeover) ----- */
+  async function bhMicTakeover() {
+    if (window.RaniApp && RaniApp.micTakeover) {
+      try { RaniApp.micTakeover(); } catch (e) {}
+      await new Promise(function (r) { setTimeout(r, 350); });
+    }
+  }
+  function micRelease() {
+    if (window.RaniApp && RaniApp.micRelease) { try { RaniApp.micRelease(); } catch (e) {} }
+  }
+
+  /* ----- Mic track death (BADSHAH v7.8.3 A5) ----- */
+  function micAudioTrack() { try { return (live.stream && live.stream.getAudioTracks && live.stream.getAudioTracks()[0]) || null; } catch (e) { return null; } }
+  function micTrackIsDead() { var t = micAudioTrack(); return !!(live.micDead || (t && (t.readyState === 'ended' || t.muted))); }
+  function detachMicHandlers(stream) { try { (stream ? stream.getAudioTracks() : []).forEach(function (t) { t.onmute = null; t.onended = null; }); } catch (e) {} }
+  function attachMicHandlers(stream) {
+    if (!stream || !stream.getAudioTracks) return;
+    stream.getAudioTracks().forEach(function (t) {
+      t.onmute = function () { onMicTrackDead('mute', t); };
+      t.onended = function () { onMicTrackDead('ended', t); };
+    });
+  }
+  function onMicTrackDead(kind, track) {
+    if (!live.on) return;
+    if (live.stream && track && live.stream.getAudioTracks().indexOf(track) < 0) return;
+    if (live.micDead) return;
+    live.micDead = true; live.micDeadAt = Date.now(); live.diag.micTrackDeaths++;
+    liveLog('MIC TRACK DEAD (' + kind + ') — fresh mic lene ki koshish');
+    setStatus('Microphone lost — reconnecting mic…');
+    reacquireMic('track-' + kind);
+  }
+
+  async function reacquireMic(reason) {
+    if (!live.on || !live.ac) return false;
+    if (live.micReacq) return false;
+    if (live.micAttempts >= MIC_REACQ_MAX) {
+      setStatus('Microphone lost — mic wapas nahi mila. Mic permission check karo, ya call end karke dobara start karo.');
+      liveLog('MIC REACQUIRE CAP hit (' + MIC_REACQ_MAX + ')');
+      return false;
+    }
+    live.micReacq = true; live.micAttempts++; live.micReacqLastAt = Date.now();
+    liveLog('MIC REACQUIRE try #' + live.micAttempts + ' (' + reason + ')');
+    try {
+      await bhMicTakeover();
+      var fresh = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+      if (!live.on || !live.ac) { try { fresh.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} return false; }
+      var old = live.stream;
+      detachMicHandlers(old);
+      if (old && old !== fresh) { try { old.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} }
+      live.stream = fresh;
+      attachMicHandlers(fresh);
+      try { fresh.getAudioTracks().forEach(function (t) { t.enabled = !live.muted; }); } catch (e) {}
+      live.micDead = false; live.micDeadAt = 0;
+      live.micAttempts = 0; /* success par cap reset — cap sirf lagataar NAKAM koshishon ke liye hai */
+      buildMicPipeline();
+      live.diag.lastFrameAt = Date.now();
+      live.diag.micReacquires++;
+      liveLog('MIC REACQUIRED — naya stream, pipeline rebuilt');
+      if (!live.focusPaused) setStatus('Gemini Live — speak, I am listening');
+      return true;
+    } catch (e) {
+      liveLog('MIC REACQUIRE fail', e);
+      if (e && e.name === 'NotAllowedError') {
+        setStatus('Microphone permission was revoked — mic permission allow karo, phir call end karke dobara start karo.');
+      } else {
+        setStatus('Microphone lost — mic restart nahi ho saka. Call end karke dobara try karo.');
+      }
+      if (live.on && live.micAttempts < MIC_REACQ_MAX && !live.micReacqT) {
+        live.micReacqT = setTimeout(function () { live.micReacqT = null; if (live.on && live.micDead) reacquireMic('retry'); }, 1800);
+      }
+      return false;
+    } finally { live.micReacq = false; }
+  }
+
+  /* ----- Mic pipeline (BADSHAH v7.8) ----- */
+  function buildMicPipeline() {
+    if (!live.ac || !live.stream) return false;
+    try { if (live.proc) { live.proc.onaudioprocess = null; live.proc.disconnect(); } } catch (e) {}
+    try { if (live.micSrc) live.micSrc.disconnect(); } catch (e) {}
+    var src = live.ac.createMediaStreamSource(live.stream); live.micSrc = src;
+    live.analyser = live.ac.createAnalyser(); live.analyser.fftSize = 256; src.connect(live.analyser);
+    var proc = live.ac.createScriptProcessor(2048, 1, 1); live.proc = proc;
+    var g = live.ac.createGain(); g.gain.value = 0; live.micGain = g;
+    src.connect(proc); proc.connect(g); g.connect(live.ac.destination);
+    proc.onaudioprocess = onAudioChunk;
+    live.diag.lastFrameAt = Date.now();
+    return true;
+  }
+
+  function downsampleTo16k(f, rate) {
+    if (!rate || rate === 16000) return f;
+    var ratio = rate / 16000; var len = Math.max(1, Math.floor(f.length / ratio)); var out = new Float32Array(len);
+    for (var i = 0; i < len; i++) { var idx = i * ratio; var i0 = Math.floor(idx); var i1 = Math.min(i0 + 1, f.length - 1); var fr = idx - i0; out[i] = f[i0] * (1 - fr) + f[i1] * fr; }
+    return out;
+  }
+
+  function onAudioChunk(e) {
+    if (!live.on || live.muted || !live.ac) return;
+    var raw = downsampleTo16k(e.inputBuffer.getChannelData(0), live.ac.sampleRate);
+    var rsum = 0; for (var i = 0; i < raw.length; i++) rsum += raw[i] * raw[i];
+    var rms = Math.sqrt(rsum / Math.max(1, raw.length));
+    live.diag.frames++; live.diag.lastFrameAt = Date.now(); live.diag.lastRms = rms;
+    if (rms > live.diag.maxRms) live.diag.maxRms = rms;
+    /* Audio focus kisi aur app ke paas hai — frame bhejna band, sirf drop ginna. */
+    if (live.focusPaused) { live.diag.droppedFocus = (live.diag.droppedFocus || 0) + 1; return; }
+    /* Door se awaz ke liye halka gain — BOOST 1.6 (BADSHAH v7.8). */
+    var f = new Float32Array(raw.length); var BOOST = 1.6;
+    for (var j = 0; j < raw.length; j++) f[j] = Math.tanh(raw[j] * BOOST);
+    if (!live.setupDone) { live.diag.droppedPreSetup++; return; }
+    if (!live.ws || live.ws.readyState !== 1) { live.diag.droppedNoSocket++; return; }
+    /* ECHO GUARD (asal fix): jab tak model bol raha hai, mic frames nahi bhejte;
+       user zor se beech mein bole (sustained loud voice) to playback rok kar
+       usay sunte hain (barge-in). */
+    var nowT = live.ac.currentTime;
+    var playing = (live.playT > nowT + 0.12) || live.sources.length > 0;
+    if (playing && nowT > (live.bargeUntil || 0)) {
+      if (rms > 0.16) { live.barge = (live.barge || 0) + 1; } else live.barge = 0;
+      if (live.barge >= 5) {
+        live.barge = 0; live.bargeUntil = nowT + 1.6; live.diag.bargeIns++;
+        flushPlayback(); liveLog('BARGE-IN: user bol raha hai — playback roka, mic khola');
+      } else { live.diag.droppedPlayback++; return; }
+    } else if (!playing) live.barge = 0;
+    var pcm = new Int16Array(f.length);
+    for (var k = 0; k < f.length; k++) pcm[k] = Math.max(-1, Math.min(1, f[k])) * 32767;
+    var bin = ''; var bytes = new Uint8Array(pcm.buffer);
+    for (var m = 0; m < bytes.length; m += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(m, m + 8192));
+    try {
+      live.ws.send(JSON.stringify({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: btoa(bin) } } }));
+      live.diag.sent++; live.diag.lastSentAt = Date.now(); live.sendErrStreak = 0;
+    } catch (err) {
+      live.diag.sendErrors++; live.sendErrStreak = (live.sendErrStreak || 0) + 1;
+      if (live.sendErrStreak >= 3) { live.sendErrStreak = 0; liveLog('mic send baar baar fail — reconnect path'); forceLiveReconnect('send-errors'); }
+    }
+  }
+
+  /* ----- Mic watchdog (BADSHAH v7.8.3 A5/A8, every 1 s) ----- */
+  function startMicWatchdog() {
+    if (live.micWatch) return;
+    live.micWatch = setInterval(async function () {
+      if (!live.on) return;
+      var now = Date.now();
+      if (live.ac && live.ac.state !== 'running') {
+        liveLog('AudioContext state =', live.ac.state, '— resume try');
+        try { await live.ac.resume(); } catch (e) {}
+      }
+      if (live.stream && micTrackIsDead()) {
+        if (!live.micDead) { live.micDead = true; live.micDeadAt = now; live.diag.micTrackDeaths++; liveLog('WATCHDOG: mic track ended/muted mila — reacquire'); }
+        if (!live.micReacq && (now - (live.micReacqLastAt || 0)) > 4000) reacquireMic('watchdog');
+      }
+      if (live.setupDone && !live.muted && !micTrackIsDead() && live.diag.lastFrameAt && (now - live.diag.lastFrameAt) > 3000 && (now - (live.diag.lastRebuildAt || 0)) > 8000) {
+        live.diag.lastRebuildAt = now; live.diag.rebuilds++;
+        liveLog('WATCHDOG: 3s se koi mic frame nahi — mic pipeline dobara bana raha hoon');
+        try { buildMicPipeline(); } catch (e) { liveLog('Mic rebuild fail', e); }
+      }
+      if (live.setupDone && (now - (live.diag.lastDiagAt || 0)) > 10000) { live.diag.lastDiagAt = now; liveLog('mic flow', live.diag); }
+      if (live.sources && live.sources.length > 0 && live.playStartAt && (now - (live.lastSrcEndAt || live.playStartAt)) > 8000 && (now - live.playStartAt) > 8000) {
+        live.diag.playbackWatchdogFires++;
+        liveLog('PLAYBACK WATCHDOG: 8s se koi playback source end nahi hua — playing state force-clear');
+        flushPlayback(); live.playStartAt = 0; live.lastSrcEndAt = 0; live.barge = 0;
+      }
+    }, 1000);
+  }
+
+  /* ----- ensureAudio (BADSHAH): mic takeover -> getUserMedia -> AC -> pipeline ----- */
+  async function ensureAudio() {
+    if (live.ac) {
+      if (live.ac.state === 'suspended') { try { await live.ac.resume(); } catch (e) {} }
+      if (live.stream && micTrackIsDead()) { await reacquireMic('ensure-audio'); }
+      else if (!live.proc && live.stream) { try { buildMicPipeline(); } catch (e) {} }
+      startMicWatchdog(); return true;
+    }
+    var gum = function () { return navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS); };
+    await bhMicTakeover();
+    try { live.stream = await gum(); }
+    catch (e) {
+      if (e && e.name === 'NotAllowedError') { setStatus('Microphone permission not granted'); return false; }
+      for (var i = 0; i < 3 && !live.stream; i++) {
+        setStatus('Taking the mic…');
+        await bhMicTakeover();
+        await new Promise(function (r) { setTimeout(r, 500 + i * 400); });
+        try { live.stream = await gum(); } catch (e2) {}
+      }
+      if (!live.stream) { setStatus('Microphone not found'); return false; }
+    }
+    attachMicHandlers(live.stream);
+    var AC = window.AudioContext || window.webkitAudioContext;
+    live.ac = new AC(); /* ONE AudioContext, default sample rate (BADSHAH) */
+    if (live.ac.state === 'suspended') { try { await live.ac.resume(); } catch (e) {} }
+    try { live.ac.onstatechange = function () { liveLog('AudioContext statechange →', live.ac && live.ac.state); if (live.ac && live.ac.state === 'suspended' && live.on) { live.ac.resume().catch(function () {}); } }; } catch (e) {}
+    buildMicPipeline();
+    startMicWatchdog();
+    liveLog('mic ready');
+    return true;
+  }
+
+  /* ----- Playback (BADSHAH v7.8.2) ----- */
+  function playPcm(b64) {
+    var ac = live.ac; if (!ac) return;
+    if (ac.state === 'suspended') { ac.resume().catch(function () {}); }
+    var bin = atob(b64), bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    var pcm = new Int16Array(bytes.buffer);
+    var buf = ac.createBuffer(1, pcm.length, 24000), ch = buf.getChannelData(0);
+    for (var j = 0; j < pcm.length; j++) ch[j] = pcm[j] / 32768;
+    var s = ac.createBufferSource(); s.buffer = buf;
+    /* Cross-context guard: agar outAn kisi purane/band AudioContext ka reh gaya
+       ho to gira do — cross-context connect hamesha throw karta hai. */
+    if (live.outAn && live.outAn.context !== ac) { try { live.outAn.disconnect(); } catch (e) {} live.outAn = null; }
+    if (!live.outAn) { try { live.outAn = ac.createAnalyser(); live.outAn.fftSize = 256; live.outAn.connect(ac.destination); } catch (e) {} }
+    try { if (live.outAn) s.connect(live.outAn); else s.connect(ac.destination); }
+    catch (e) { try { s.connect(ac.destination); } catch (e2) {} }
+    if (live.sources.length === 0) { live.playStartAt = Date.now(); live.lastSrcEndAt = Date.now(); }
+    live.sources.push(s);
+    s.onended = function () { var i = live.sources.indexOf(s); if (i >= 0) live.sources.splice(i, 1); live.lastSrcEndAt = Date.now(); if (live.sources.length === 0) live.playStartAt = 0; };
+    var now = ac.currentTime; live.playT = Math.max(live.playT || 0, now + 0.02);
+    s.start(live.playT); live.playT += buf.duration; eqPulse();
+  }
+  function flushPlayback() { live.sources.forEach(function (s) { try { s.stop(); } catch (e) {} }); live.sources = []; live.playT = 0; }
+
+  /* ----- Liveness (BADSHAH A3, every 5 s) ----- */
+  function forceLiveReconnect(why) {
+    if (!live.on) return;
+    liveLog('force reconnect:', why);
+    var ws = live.ws;
+    if (ws) { try { ws.close(); } catch (e) {} /* onclose -> scheduleReconnect */ }
+    else scheduleReconnect();
+  }
+  function startLiveness() {
+    if (live.liveT) return;
+    live.liveT = setInterval(function () {
+      if (!live.on) return;
+      if (!live.setupDone || !live.lastServerMsgAt) return;
+      var now = Date.now();
+      var silentFor = now - live.lastServerMsgAt;
+      var sentRecently = live.diag.lastSentAt && (now - live.diag.lastSentAt) < 10000;
+      if (silentFor > LIVE_LIVENESS_MS && sentRecently) {
+        live.diag.livenessReconnects++; live.lastServerMsgAt = now;
+        liveLog('LIVENESS: ' + Math.round(silentFor / 1000) + 's se server khamosh — reconnect');
+        forceLiveReconnect('liveness');
+      }
+    }, 5000);
+  }
+
+  /* ----- WebSocket (BADSHAH's exact way) ----- */
+  function connectWs() {
+    var ws = new WebSocket('wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=' + encodeURIComponent(KEY));
+    live.ws = ws;
+    ws.onopen = function () { try { ws.send(setupPayload()); } catch (e) {} };
+    /* Promise-chain queue (BADSHAH v7.8.3 A7): arrival order lazmi — Blob
+       text() async hai, is liye har message queue se guzarta hai. */
+    ws.onmessage = function (ev) {
+      live._msgQ = (live._msgQ || Promise.resolve()).then(function () { return handleLiveMessage(ev, ws); }).catch(function (e) { liveLog('onmessage queue error', e); });
+    };
+    ws.onclose = function () { if (live.on) scheduleReconnect(); };
+    ws.onerror = function () {
+      if (!live.setupDone) {
+        setErr('Live connection did not start. The internet is slow, or this model did not run on the key — check Settings → Live Voice.');
+        retryBtn.style.display = 'inline-block';
+      }
+    };
+  }
+
+  async function handleLiveMessage(ev, ws) {
+    var data; try { data = JSON.parse(typeof ev.data === 'string' ? ev.data : await ev.data.text()); } catch (e) { return; }
+    live.lastServerMsgAt = Date.now(); /* har server message liveness stamp */
+    if (data.setupComplete !== undefined) {
+      live.setupDone = true; live.retries = 0;
+      setStatus('RANI is speaking...'); subEl.textContent = 'Real voice · Gemini Live'; setErr(''); retryBtn.style.display = 'none'; startEq();
+      startLiveness();
+      if (!live.greeted) {
+        live.greeted = true;
+        try { ws.send(greet()); } catch (e) {}
+      }
+      if (window.RaniApp && RaniApp.onLiveConnected) RaniApp.onLiveConnected();
+    }
+    if (data.sessionResumptionUpdate && data.sessionResumptionUpdate.resumable)
+      live.handle = data.sessionResumptionUpdate.newHandle;
+    if (data.error) {
+      var m = (data.error.message || 'Live error').toString();
+      setErr('Live voice error: ' + m.slice(0, 140));
+      return;
+    }
+    var sc = data.serverContent;
+    if (sc) {
+      if (sc.interrupted) { flushPlayback(); }
+      var parts = (sc.modelTurn && sc.modelTurn.parts) || [];
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].inlineData && parts[i].inlineData.data) playPcm(parts[i].inlineData.data);
+      }
+      if (sc.outputTranscription && sc.outputTranscription.text) {
+        setCaption('RANI', sc.outputTranscription.text); setStatus('RANI is speaking...'); eqPulse();
+      }
+      if (sc.inputTranscription && sc.inputTranscription.text) {
+        setCaption('Babu Jaan', sc.inputTranscription.text); setStatus('Listening...');
+      }
+    }
+    if (data.goAway) { try { ws.close(); } catch (e) {} /* onclose reconnects — never call scheduleReconnect() here too (double reconnect) */ }
+  }
+
+  function scheduleReconnect() {
+    // Same model only (no ladder — boss's order). Resume a live call that
+    // dropped; an initial failure shows the error + Try again instead.
+    if (!live.on) return;
+    if (!live.setupDone) { setErr('Live connection did not start in 15 seconds (model: ' + MODEL + '). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.'); retryBtn.style.display = 'inline-block'; return; }
+    if (live.retries >= 8) { setErr('Connection bar bar cut raha hai — thodi dair baad try karo.'); retryBtn.style.display = 'inline-block'; return; }
+    live.retries++;
+    setStatus('Dobara connect ho raha hai... (' + live.retries + ')');
+    setTimeout(function () { if (live.on) connectWs(); }, Math.min(600 * live.retries, 3000));
+  }
+
+  /* ----- Teardown (BADSHAH stopEngine + stopAudio) ----- */
+  function stopLive() {
+    live.on = false; stopEq();
+    try { live.ws && live.ws.close(); } catch (e) {}
+    live.ws = null; live.setupDone = false; live.greeted = false;
+    flushPlayback();
+    if (live.micWatch) { clearInterval(live.micWatch); live.micWatch = null; }
+    if (live.liveT) { clearInterval(live.liveT); live.liveT = null; }
+    if (live.micReacqT) { clearTimeout(live.micReacqT); live.micReacqT = null; }
+    live.playStartAt = 0; live.lastSrcEndAt = 0;
+    live.barge = 0; live.bargeUntil = 0; live.focusPaused = false;
+    detachMicHandlers(live.stream);
+    live.micDead = false; live.micDeadAt = 0; live.micReacq = false; live.micAttempts = 0; live.micReacqLastAt = 0;
+    try { if (live.proc) { live.proc.onaudioprocess = null; live.proc.disconnect(); } } catch (e) {}
+    try { if (live.micSrc) live.micSrc.disconnect(); } catch (e) {}
+    try { if (live.outAn) live.outAn.disconnect(); } catch (e) {}
+    live.outAn = null;
+    try { live.stream && live.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {}
+    try { live.ac && live.ac.close(); } catch (e) {}
+    live.ac = live.stream = live.proc = live.analyser = live.micSrc = live.micGain = null;
+    live.playT = 0; live.sources = []; live.handle = null;
+    micRelease();
+  }
+
+  function endCall() {
+    stopLive();
+    setStatus('Call ended'); subEl.textContent = 'Classic voice mode'; setCaption('', '');
+    if (window.RaniApp && RaniApp.onCallEnded) { try { RaniApp.onCallEnded(); } catch (e) {} }
+  }
+
+  async function start() {
+    if (!KEY || KEY.length < 20) {
+      setStatus('Key missing'); setErr('Gemini key nahi mili — call RANI app se start karo (Settings → API Keys).');
+      return;
+    }
+    live.on = true; live.retries = 0; live.setupDone = false; live.greeted = false;
+    setStatus('Connecting to Gemini 3.8 Live...'); subEl.textContent = 'Classic voice mode';
+    // 15 s watchdog — a hung handshake shows at once.
+    setTimeout(function () {
+      if (live.on && !live.setupDone) scheduleReconnect();
+    }, 15000);
+    // BADSHAH's order: audio FIRST (mic takeover + getUserMedia + pipeline),
+    // THEN the socket — startEngine() does ensureAudio() before connectGemini().
+    if (!await ensureAudio()) {
+      live.on = false;
+      setStatus('Mic permission chahiye');
+      setErr('Mic permission nahi mili — app ki Settings mein microphone Allow karo, phir dobara try karo.');
+      retryBtn.style.display = 'inline-block';
+      return;
+    }
+    connectWs();
+  }
+
+  // Buttons
+  $('muteBtn').onclick = function () {
+    live.muted = !live.muted;
+    this.classList.toggle('muted', live.muted);
+    if (live.stream) live.stream.getAudioTracks().forEach(function (t) { t.enabled = !live.muted; });
+    this.querySelector('span:last-child').textContent = live.muted ? 'Unmute' : 'Mute';
+  };
+  $('endBtn').onclick = endCall;
+  retryBtn.onclick = function () { retryBtn.style.display = 'none'; setErr(''); stopLive(); start(); };
+
+  // Let the native app end the call too (evaluateJavascript("endRaniCall()")).
+  window.endRaniCall = endCall;
+  window.startRaniCall = start;
+
+  start();
+})();
+</script>
+</body>
+</html>

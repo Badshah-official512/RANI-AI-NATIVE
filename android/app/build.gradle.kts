@@ -28,8 +28,8 @@ android {
         applicationId = "com.badshah222.rani.ai"   // must match Firebase (google-services.json)
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.6.0"
+        versionCode = 16
+        versionName = "1.6.1"
         // Supabase values come from CI secrets (see docs/SETUP-SECRETS.md). findProperty
         // with a placeholder fallback keeps debug builds green before secrets exist.
         buildConfigField("String", "SUPABASE_URL", "\"${project.findProperty("SUPABASE_URL") ?: "https://placeholder.supabase.co"}\"")
@@ -65,6 +65,30 @@ android {
     buildFeatures { compose = true; buildConfig = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
+
+// ---- v1.6.1: RANI Live page character image (build-time copy) ----
+// The call page is bundled inside the APK at src/main/assets/rani-live.html
+// and loads its character image from src/main/assets/assets/rani-character.png.
+// That PNG is a BINARY file and the GitHub push connector cannot push binaries,
+// so it is NOT committed under assets/. Instead it is copied at build time
+// from the byte-identical drawable already in the repo
+// (src/main/res/drawable-nodpi/rani_character.png, sha256 679a293e…).
+// Idempotent (re-running the copy is harmless) and fail-soft: a missing
+// source only logs a warning — the call page then uses its orb fallback and
+// the build still succeeds. Wired into preBuild so it runs before the assets
+// are packaged for BOTH debug and release.
+val copyRaniCharacterAsset = tasks.register<Copy>("copyRaniCharacterAsset") {
+    from("src/main/res/drawable-nodpi/rani_character.png")
+    into("src/main/assets/assets")
+    rename { "rani-character.png" }
+    onlyIf { file("src/main/res/drawable-nodpi/rani_character.png").exists() }
+    doFirst {
+        if (!file("src/main/res/drawable-nodpi/rani_character.png").exists()) {
+            logger.warn("copyRaniCharacterAsset: source PNG missing — skipping (call page will use its orb fallback)")
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(copyRaniCharacterAsset) }
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2024.12.01")
