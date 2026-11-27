@@ -452,7 +452,7 @@ class RaniLiveBridge(
             "bluetooth" -> Settings.ACTION_BLUETOOTH_SETTINGS
             "display", "brightness", "screen" -> Settings.ACTION_DISPLAY_SETTINGS
             "sound", "volume", "audio" -> Settings.ACTION_SOUND_SETTINGS
-            "battery" -> Settings.ACTION_BATTERY_SETTINGS
+            "battery" -> Settings.ACTION_BATTERY_SAVER_SETTINGS // FIX (CI run #45): ACTION_BATTERY_SETTINGS does not exist in android.provider.Settings (verified in SDK API 35/36) — Battery Saver settings is the real battery page.
             "location" -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
             "apps", "applications" -> Settings.ACTION_APPLICATION_SETTINGS
             "notifications" -> Settings.ACTION_APP_NOTIFICATION_SETTINGS

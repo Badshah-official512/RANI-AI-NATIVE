@@ -2,6 +2,7 @@ package com.badshah222.rani.ai.features.home
 
 import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager // FIX (CI run #45): missing import — PackageManager.PERMISSION_GRANTED used at line 81
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.compose.runtime.Composable
