@@ -191,23 +191,28 @@ class PhoneExecutor(private val ctx: Context) {
     /** Opens the camera and taps the shutter via accessibility when the
      *  service is ON. execute() runs on the main thread, so the shutter
      *  retry (the camera app needs a moment to appear — see the bridge's
-     *  takePhoto, F1) runs on a worker thread, fire-and-forget. */
+     *  takePhoto, F1) runs on a worker thread, fire-and-forget — and its
+     *  result is NOT known here. F15: never claim the photo was taken
+     *  before the tap is known to have landed; report the camera as
+     *  open and let the user tap the shutter (the background tap is a
+     *  best-effort bonus, not a promise). */
     private fun takePhoto(): PhoneResult {
         if (!launch(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))) {
             return PhoneResult.Failed("No camera app found.")
         }
         val svc = RaniAccessibilityService.instance
-            ?: return PhoneResult.Done("Camera is open — tap the shutter to take the photo.")
-        Thread {
-            val deadline = System.currentTimeMillis() + 3000
-            while (System.currentTimeMillis() < deadline) {
-                for (label in listOf("Shutter", "Take photo", "Capture")) {
-                    if (svc.tapText(label) == "ok") return@Thread
+        if (svc != null) {
+            Thread {
+                val deadline = System.currentTimeMillis() + 3000
+                while (System.currentTimeMillis() < deadline) {
+                    for (label in listOf("Shutter", "Take photo", "Capture")) {
+                        if (svc.tapText(label) == "ok") return@Thread
+                    }
+                    try { Thread.sleep(300) } catch (e: InterruptedException) { return@Thread }
                 }
-                try { Thread.sleep(300) } catch (e: InterruptedException) { return@Thread }
-            }
-        }.start()
-        return PhoneResult.Done("Taking your photo.")
+            }.start()
+        }
+        return PhoneResult.Done("Camera is open — tap the shutter to take the photo.")
     }
 
     /** MYRA-style system monitor answers, computed on-device — no internet needed. */

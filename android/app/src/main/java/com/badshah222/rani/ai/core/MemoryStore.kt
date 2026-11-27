@@ -454,18 +454,31 @@ class MemoryStore(
             // Likes / dislikes.
             // F3: capture-BEFORE patterns — in "mujhe biryani pasand hai"
             // nothing follows "pasand hai", so the after-patterns below
-            // can never match Roman Urdu. These run first; the English
-            // after-patterns still win when something does follow.
+            // can never match Roman Urdu.
+            // F14: the captures are tempered — they can never span a
+            // second "mujhe" or a "nahi", so "mujhe chai pasand hai aur
+            // mujhe coffee nahi pasand" gives likes=chai,
+            // dislikes=coffee, and "mujhe biryani nahi pasand hai"
+            // gives dislikes=biryani only (no bogus likes="biryani
+            // nahi"). The after-patterns run only for a key the
+            // capture-before patterns did not already match, so they
+            // can never overwrite a good capture with trailing text.
             // [^.,!] keeps one capture from spanning a second clause
             // ("mujhe biryani pasand hai, mujhe cricket nahi pasand").
-            Regex("(?i)mujhe ([^.,!]+?) pasand hai").find(raw)?.let { put("likes", it.groupValues[1]) }
-            Regex("(?i)mujhe ([^.,!]+?) nahi pasand").find(raw)?.let { put("dislikes", it.groupValues[1]) }
-            Regex("(?i)(?:i like|i love|i really like|mujhe .*? pasand hai)\\s+([^.,!]{2,60})").find(raw)?.let {
-                val v = it.groupValues[1].trim()
-                if (v.isNotEmpty() && !v.startsWith("to ")) put("likes", v)
+            val likesHit = Regex("(?i)mujhe ((?:(?!mujhe|nahi)[^.,!])+?) pasand hai").find(raw)
+                ?.let { put("likes", it.groupValues[1]); true } ?: false
+            val dislikesHit = Regex("(?i)mujhe ((?:(?!mujhe)[^.,!])+?) nahi pasand").find(raw)
+                ?.let { put("dislikes", it.groupValues[1]); true } ?: false
+            if (!likesHit) {
+                Regex("(?i)(?:i like|i love|i really like)\\s+([^.,!]{2,60})").find(raw)?.let {
+                    val v = it.groupValues[1].trim()
+                    if (v.isNotEmpty() && !v.startsWith("to ")) put("likes", v)
+                }
             }
-            Regex("(?i)(?:i hate|i don't like|i dont like|mujhe .*? nahi pasand)\\s+([^.,!]{2,60})").find(raw)?.let {
-                put("dislikes", it.groupValues[1])
+            if (!dislikesHit) {
+                Regex("(?i)(?:i hate|i don't like|i dont like)\\s+([^.,!]{2,60})").find(raw)?.let {
+                    put("dislikes", it.groupValues[1])
+                }
             }
             // Birthday / anniversary.
             Regex("(?i)my birthday is ([^.,!]{2,40})").find(raw)?.let { put("birthday", it.groupValues[1]) }
