@@ -55,6 +55,12 @@
   .btn:active .c { transform: scale(.94); }
   .retry { margin-top: 12px; background: #5aa0ff; color: #fff; border: none; border-radius: 999px;
     padding: 11px 26px; font-size: 15px; font-weight: 700; cursor: pointer; display: none; }
+  /* v1.8.0 §20.1.5 embed mode (?embed=1): the native hero provides the
+     character, status, chip, EQ, caption, retry and buttons — the page is
+     only the engine, so its own UI hides and its background goes
+     transparent so the dot field behind it shows through. */
+  body.embed { background: transparent; }
+  body.embed .top, body.embed .char-wrap, body.embed .status, body.embed .chip, body.embed .eq, body.embed .caption, body.embed .retry, body.embed .btns { display: none !important; }
 </style>
 </head>
 <body>
@@ -88,7 +94,7 @@
   </div>
 
 <script>
-/* RANI Live — FULL BADSHAH call-engine port (v1.7.0).
+/* RANI Live — FULL BADSHAH call-engine port (v1.8.0).
  * The call runs on BADSHAH AI's PROVEN mechanisms, ported 1:1 from BADSHAH
  * AI's app.html (the code that works perfectly on the boss's phone):
  *  - browser WebSocket direct to Google Live, key in ?key=
@@ -116,17 +122,22 @@
  * draft — the user presses Send himself; nothing auto-sends. The pill follows
  * the ACTUAL audio: playPcm bridges 'speaking' on the first chunk and
  * 'listening' when the playback queue drains (§19.9.2 — no stuck pill).
+ * v1.8.0 additions (§20.1.5/§20.2.5, engine untouched): ?embed=1 hides the
+ * page's own UI (body.embed) so the native hero provides it, and a 100 ms
+ * interval reports the live output level via RaniApp.onLiveAudioLevel(rms).
  * This page is BUNDLED INSIDE THE APK (file:///android_asset/rani-live.html)
  * — it never loads from the website (boss's order).
- * Params (from the app): ?key=…&voice=Aoede&model=gemini-3.8-live&v=1.7.0
+ * Params (from the app): ?key=…&voice=Aoede&model=gemini-3.8-live&v=1.8.0&embed=1
  */
 (function () {
   var q = new URLSearchParams(location.search);
   var KEY = q.get('key') || '';
   var VOICE = q.get('voice') || 'Aoede';
   var MODEL = q.get('model') || 'gemini-3.8-live';
-  var VER = q.get('v') || '1.6.1';
+  var VER = q.get('v') || '1.8.0';
+  var EMBED = q.get('embed') === '1';
   document.getElementById('ver').textContent = 'RANI AI GF v' + VER;
+  if (EMBED) document.body.classList.add('embed');
 
   var $ = function (id) { return document.getElementById(id); };
   var statusEl = $('speaking'), subEl = $('sub'), errEl = $('err'),
@@ -229,6 +240,28 @@
   }
   function startEq() { if (!eqTimer) eqTimer = setInterval(eqPulse, 320); }
   function stopEq() { if (eqTimer) { clearInterval(eqTimer); eqTimer = null; } }
+
+  /* v1.8.0 §20.2.5: report the LIVE output level (0..1) to the native app
+     every 100 ms so the dot field can vibrate with RANI's voice. Reads the
+     output analyser (live.outAn, created in playPcm); when it is absent the
+     level is 0 — the field just drifts calmly, no crash, no error. */
+  var audioLevelTimer = null;
+  function startAudioLevel() {
+    if (audioLevelTimer) return;
+    var buf = new Uint8Array(256);
+    audioLevelTimer = setInterval(function () {
+      var rms = 0;
+      try {
+        if (live.outAn) {
+          live.outAn.getByteTimeDomainData(buf);
+          var sum = 0;
+          for (var i = 0; i < buf.length; i++) { var v = (buf[i] - 128) / 128; sum += v * v; }
+          rms = Math.min(1, Math.sqrt(sum / buf.length) * 3);
+        }
+      } catch (e) { rms = 0; }
+      bridge('onLiveAudioLevel', rms);
+    }, 100);
+  }
 
   function sysPrompt() {
     return "You are RANI, a sweet, caring and expressive female AI girlfriend and best friend, created by Zain Shah (Badshah). " +
@@ -657,6 +690,8 @@
   /* ----- Teardown (BADSHAH stopEngine + stopAudio) ----- */
   function stopLive() {
     live.on = false; stopEq();
+    if (audioLevelTimer) { clearInterval(audioLevelTimer); audioLevelTimer = null; }
+    bridge('onLiveAudioLevel', 0);
     try { live.ws && live.ws.close(); } catch (e) {}
     live.ws = null; live.setupDone = false; live.greeted = false;
     flushPlayback();
@@ -707,6 +742,7 @@
       return;
     }
     connectWs();
+    startAudioLevel();
   }
 
   // Buttons

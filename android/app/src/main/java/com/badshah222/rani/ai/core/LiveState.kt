@@ -42,6 +42,18 @@ object LiveState {
     private val _glowColor = MutableStateFlow(Color(0xFF8B3DFF))
     val glowColor: StateFlow<Color> = _glowColor.asStateFlow()
 
+    /** v1.8.0 §20.2.5 — live output audio level, 0..1, fed by the page's
+     *  100 ms analyser interval via RaniBridge.onLiveAudioLevel. Smoothed
+     *  (exponential, 0.35) so the dot field vibrates with her voice without
+     *  jittering on every sample; 0 when idle / not speaking / no analyser. */
+    private val _audioLevel = MutableStateFlow(0f)
+    val audioLevel: StateFlow<Float> = _audioLevel.asStateFlow()
+
+    fun onAudioLevel(level: Float) {
+        val clamped = level.coerceIn(0f, 1f)
+        _audioLevel.value = _audioLevel.value * 0.65f + clamped * 0.35f
+    }
+
     fun setState(s: String) {
         _state.value = s
         if (s == "speaking" || s == "listening" || s == "thinking" || s == "connecting") _active.value = true
@@ -50,7 +62,7 @@ object LiveState {
 
     fun onConnected() { _active.value = true; _state.value = "listening"; _muted.value = false }
 
-    fun onEnded() { _active.value = false; _state.value = "ended"; _caption.value = ""; _captionWho.value = "" }
+    fun onEnded() { _active.value = false; _state.value = "ended"; _caption.value = ""; _captionWho.value = ""; _audioLevel.value = 0f }
 
     fun setCaption(who: String, text: String) { _captionWho.value = who; _caption.value = text }
 

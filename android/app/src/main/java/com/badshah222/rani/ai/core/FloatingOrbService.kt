@@ -30,7 +30,6 @@ import com.badshah222.rani.ai.MainActivity
 import com.badshah222.rani.ai.R
 import com.badshah222.rani.ai.RaniApp
 import com.badshah222.rani.ai.features.home.RaniLiveActivity
-import androidx.compose.ui.graphics.toArgb
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -61,7 +60,12 @@ class FloatingOrbService : Service() {
     }
 
     private var wm: WindowManager? = null
-    private var orb: AgenticOrbView? = null
+    // v1.8.0 §20.2.6 + correction (2026-11-27): the floating avatar is
+    // ONE round dot-field circle at the BOTTOM of the screen
+    // (DotFieldView, diameter = orbFloatSize) — NOT full-screen, NOT the
+    // old AgenticOrbView medallion. AgenticOrbView stays in this file,
+    // unused; only the service stops using it.
+    private var dotField: DotFieldView? = null
     private var glow: EdgeGlowView? = null
     // v1.5.0 — floating call window (see buildCallCard): shown only while a
     // Live call is active AND the app is not in front.
@@ -87,11 +91,15 @@ class FloatingOrbService : Service() {
             val fg = MainActivity.appInForeground || RaniLiveActivity.callInForeground
             val liveVoiceOn = store?.autoVoiceEnabled ?: true
             callCard?.visibility = if (inCall && !fg) View.VISIBLE else View.GONE
-            orb?.visibility = if (!fg && !inCall && liveVoiceOn) View.VISIBLE else View.GONE
+            // v1.8.0 §20.2.6 + correction: the dot circle appears under the
+            // same conditions as the old avatar (app not in front AND Live
+            // Voice ON AND overlay granted) and hides the same way (Live
+            // Voice OFF, app in front, or while the call card is up). Only
+            // the circle itself is touchable — everything outside it is
+            // transparent and pass-through; the call card stays the tap
+            // target while a call is active.
+            dotField?.visibility = if (!fg && !inCall && liveVoiceOn) View.VISIBLE else View.GONE
             glow?.visibility = if (!fg && liveVoiceOn) View.VISIBLE else View.GONE
-            // §19.8.4: the avatar's glow ring shows the same emotion colour
-            // as the hero, so the avatar's mood matches.
-            (orb as? AgenticOrbView)?.moodColor = LiveState.glowColor.value.toArgb()
             if (inCall) updateCallCard()
             visHandler.postDelayed(this, 600)
         }
@@ -117,47 +125,73 @@ class FloatingOrbService : Service() {
         super.onCreate()
         wm = getSystemService(WindowManager::class.java)
         store = (application as RaniApp).container.store
-        // v1.7.0 §19.3: size honours the Settings slider orbFloatSize
-        // (default 96, range 56–200) instead of the old hardcoded 76 dp.
-        val orbDp = (store?.orbFloatSize ?: 96).coerceIn(56, 200)
-        val sizePx = (orbDp * resources.displayMetrics.density).toInt()
-        val bmp = medallionBitmap()
-        val iv = AgenticOrbView(this, bmp).apply { contentDescription = "RANI AI" }
         val type = if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
-        val params = WindowManager.LayoutParams(
-            sizePx, sizePx, type,
+        // v1.8.0 §20.2.6 + correction (2026-11-27): the floating avatar is
+        // ONE round dot-field circle at the BOTTOM of the screen —
+        // diameter × diameter (diameter = SecureStore.orbFloatSize,
+        // default 96 dp, range 56–200, the existing Settings slider),
+        // TYPE_APPLICATION_OVERLAY, FLAG_NOT_FOCUSABLE |
+        // FLAG_LAYOUT_NO_LIMITS, TRANSLUCENT, gravity BOTTOM |
+        // CENTER_HORIZONTAL, bottom margin ~24 dp (just above the
+        // navigation bar). The circle keeps the OLD AVATAR's touch
+        // behaviour: drag moves it, tap (<12 px) opens the app straight
+        // into the hero call (MainActivity + EXTRA_WAKE), long-press
+        // (>600 ms, <12 px move) dismisses it (stopSelf). Everything
+        // outside the circle is transparent and pass-through.
+        val d = resources.displayMetrics.density
+        val diaPx = ((store?.orbFloatSize ?: 96).coerceIn(56, 200) * d).toInt()
+        val field = DotFieldView(this)
+        val fParams = WindowManager.LayoutParams(
+            diaPx, diaPx, type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; x = 0; y = (54 * resources.displayMetrics.density).toInt() }
-
-        var downX = 0; var downY = 0; var startX = 0; var startY = 0; var downAt = 0L
-        iv.setOnTouchListener { v, e ->
+        ).apply { gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL; x = 0; y = (24 * d).toInt() }
+        dotField = field
+        field.visibility = View.GONE
+        var fDownX = 0; var fDownY = 0; var fStartX = 0; var fStartY = 0; var fDownAt = 0L
+        field.setOnTouchListener { v, e ->
             when (e.action) {
-                MotionEvent.ACTION_DOWN -> { downX = e.rawX.toInt(); downY = e.rawY.toInt(); startX = params.x; startY = params.y; downAt = System.currentTimeMillis(); true }
+                MotionEvent.ACTION_DOWN -> {
+                    // F10 (v1.8.0 fix): the window is a dia x dia SQUARE but
+                    // the circle is inscribed in it — the corner patches
+                    // outside the circle (~21% of the square) must NOT
+                    // swallow touches meant for the app underneath. A
+                    // touch farther than dia/2 from the view centre passes
+                    // through (return false); drag/tap/long-press inside
+                    // the circle are unchanged.
+                    val cx = v.width / 2f; val cy = v.height / 2f
+                    val r = minOf(v.width, v.height) / 2f
+                    val dx = e.x - cx; val dy = e.y - cy
+                    if (dx * dx + dy * dy > r * r) return@setOnTouchListener false
+                    fDownX = e.rawX.toInt(); fDownY = e.rawY.toInt(); fStartX = fParams.x; fStartY = fParams.y; fDownAt = System.currentTimeMillis(); true
+                }
                 MotionEvent.ACTION_MOVE -> {
-                    params.x = startX + (e.rawX.toInt() - downX); params.y = startY + (e.rawY.toInt() - downY)
-                    runCatching { wm?.updateViewLayout(v, params) }; true
+                    // BOTTOM gravity: y is measured up from the bottom edge,
+                    // so a downward drag (rawY grows) DECREASES y.
+                    fParams.x = fStartX + (e.rawX.toInt() - fDownX); fParams.y = fStartY - (e.rawY.toInt() - fDownY)
+                    runCatching { wm?.updateViewLayout(v, fParams) }; true
                 }
                 MotionEvent.ACTION_UP -> {
-                    val moved = Math.abs(e.rawX.toInt() - downX) + Math.abs(e.rawY.toInt() - downY)
-                    if (moved < 12) {
-                        if (System.currentTimeMillis() - downAt > 600) {
-                            stopSelf() // long-press removes the orb
-                        } else {
-                            val i = Intent(this, MainActivity::class.java)
-                                .putExtra("EXTRA_WAKE", "1")
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                            startActivity(i)
-                        }
+                    val moved = Math.abs(e.rawX.toInt() - fDownX) + Math.abs(e.rawY.toInt() - fDownY)
+                    val heldMs = System.currentTimeMillis() - fDownAt
+                    if (moved < 12 && heldMs > 600) {
+                        // Long-press: dismiss the circle (stopSelf — the
+                        // service restarts on the next cold start).
+                        stopSelf()
+                    } else if (moved < 12) {
+                        val i = Intent(this, MainActivity::class.java)
+                            .putExtra("EXTRA_WAKE", "1")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        startActivity(i)
                     }
                     true
                 }
                 else -> false
             }
         }
-        orb = iv
-        runCatching { wm?.addView(iv, params) }
+        runCatching { wm?.addView(field, fParams) }
+        val bmp = medallionBitmap()
         // v7.3: RGB edge glow — call ke doran poori screen ke kinaron par roshni,
         // app background mein ho tab bhi rehti hai (service sirf call ke doran chalti hai)
         val gv = EdgeGlowView(this)
@@ -178,12 +212,12 @@ class FloatingOrbService : Service() {
     override fun onDestroy() {
         visHandler.removeCallbacks(visLoop)
         glow?.stopAnim()
-        orb?.stopAnim()
+        dotField?.stop()
         glow?.let { runCatching { wm?.removeView(it) } }
-        orb?.let { runCatching { wm?.removeView(it) } }
+        dotField?.let { runCatching { wm?.removeView(it) } }
         callCard?.let { runCatching { wm?.removeView(it) } }
         glow = null
-        orb = null; callCard = null; callStatus = null; callCaption = null; callMuteBtn = null
+        dotField = null; callCard = null; callStatus = null; callCaption = null; callMuteBtn = null
         running = false
         super.onDestroy()
     }

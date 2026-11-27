@@ -6,6 +6,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -13,6 +14,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.badshah222.rani.ai.MainActivity
+import com.badshah222.rani.ai.RaniApp
+import com.badshah222.rani.ai.features.onboarding.OnboardingScreen
 import com.badshah222.rani.ai.features.about.AboutScreen
 import com.badshah222.rani.ai.features.camera.CameraViewScreen
 import com.badshah222.rani.ai.features.camera.CameraViewModel
@@ -90,15 +93,14 @@ fun AppNav(activity: Activity) {
 @Composable
 private fun SignedInNav(session: SessionViewModel) {
     val nav = rememberNavController()
-    // v1.4.0 — floating orb tap ("G Babu" wake) opens the voice call ON TOP of
-    // the screen, BADSHAH-style: the orb sends EXTRA_WAKE, MainActivity sets
-    // wakeVoiceFlow, and the app navigates straight to the call screen instead
-    // of home. Reset after navigating so it fires once per tap.
+    // v1.8.0 §20.1.4 — the call lives on the Home hero now, so the
+    // floating orb tap ("G Babu" wake) navigates to "home", not "voice".
+    // Reset after navigating so it fires once per tap.
     val wakeVoice by MainActivity.wakeVoiceFlow.collectAsState()
     LaunchedEffect(wakeVoice) {
         if (wakeVoice) {
             MainActivity.wakeVoiceFlow.value = false
-            nav.navigate("voice") { launchSingleTop = true }
+            nav.navigate("home") { launchSingleTop = true }
         }
     }
     // ViewModels are created here (nav-graph scope) so Home state survives opening Settings/Help.
@@ -123,7 +125,16 @@ private fun SignedInNav(session: SessionViewModel) {
 
     Scaffold(containerColor = Ink) { pad ->
         Box(Modifier.padding(pad)) {
-            NavHost(nav, startDestination = "home") {
+            // v1.8.0 §20.3: signed-in + onboarding not done → the onboarding
+            // runs first (one question per screen); otherwise Home.
+            val appCtx = LocalContext.current.applicationContext
+            val store = remember { (appCtx as RaniApp).container.store }
+            NavHost(nav, startDestination = if (store.onboardingDone) "home" else "onboarding") {
+                composable("onboarding") {
+                    OnboardingScreen(onDone = {
+                        nav.navigate("home") { popUpTo("onboarding") { inclusive = true } }
+                    })
+                }
                 composable("home") { HomeScreen(session, home, world, memory, visualhub) { nav.navigate(it) } }
                 composable("controls") { ControlsScreen(home, { nav.popBackStack() }) { nav.navigate(it) } }
                 composable("chat") { ChatScreen(home, { nav.popBackStack() }, { nav.navigate("voice") }) }
@@ -132,7 +143,7 @@ private fun SignedInNav(session: SessionViewModel) {
                 composable("browser") { BrowserScreen(home, browser) { nav.popBackStack() } }
                 composable("screen") { ScreenShareScreen(screen) { nav.popBackStack() } }
                 composable("secret") { SecretChatScreen(secret, { nav.popBackStack() }, { nav.navigate(it) }) }
-                composable("settings") { SettingsScreen(session, settings, { nav.popBackStack() }, { nav.navigate("permissions") }) }
+                composable("settings") { SettingsScreen(session, settings, { nav.popBackStack() }, { nav.navigate("permissions") }, { nav.navigate("onboarding") }) }
                 composable("help") { HelpScreen(help) { nav.popBackStack() } }
                 composable("about") { AboutScreen { nav.popBackStack() } }
                 composable("history") { ChatHistoryScreen(home, history) { nav.popBackStack() } }

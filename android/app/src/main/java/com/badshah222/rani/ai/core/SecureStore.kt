@@ -85,7 +85,9 @@ class SecureStore(context: Context) {
     var avatarChoice: String get() = prefs.getString("avatar", "girl") ?: "girl"; set(v) = prefs.edit().putString("avatar", v).apply()
 
     // ---- MYRA Live model choice (aria.py LIVE_MODELS) ----
-    /** Live model key: "3.8" (default) | "3.8-thinking" | "native-ga". */
+    /** Live model key — F6 (v1.8.0 fix): ONLY "3.8" (gemini-3.8-live).
+     *  Binding order 2026-11-26: no other Live model; the old
+     *  "3.8-thinking" / "native-ga" keys no longer exist. */
     var liveModelKey: String get() = prefs.getString("live_model_key", "3.8") ?: "3.8"; set(v) = prefs.edit().putString("live_model_key", v).apply()
 
     // ---- MYRA VoicePage: listen modes + mic ----
@@ -125,8 +127,9 @@ class SecureStore(context: Context) {
     // ---- Stonic: Awareness, Face Lock, voice-print, screen recording ----
     /** Awareness (front-app notice) — ON by default, Stonic-style; user can switch it off anytime. */
     var awarenessEnabled: Boolean get() = prefs.getBoolean("awareness_enabled", true); set(v) = prefs.edit().putBoolean("awareness_enabled", v).apply()
-    /** First-run Awareness notice shown once and dismissed. */
-    var awarenessNoticeShown: Boolean get() = prefs.getBoolean("awareness_notice_shown", false); set(v) = prefs.edit().putBoolean("awareness_notice_shown", v).apply()
+    /** v1.8.0 (§20.3) — the one-question onboarding has been completed.
+     *  Default false: a fresh sign-in runs the onboarding first. */
+    var onboardingDone: Boolean get() = prefs.getBoolean("onboarding_done", false); set(v) = prefs.edit().putBoolean("onboarding_done", v).apply()
     /** Face Lock — locks RANI when a different face is detected. OFF by default. */
     var faceLockEnabled: Boolean get() = prefs.getBoolean("face_lock_enabled", false); set(v) = prefs.edit().putBoolean("face_lock_enabled", v).apply()
     /** Enrolled boss face-print (Base64 float vector) — encrypted, on-device only, never uploaded. */

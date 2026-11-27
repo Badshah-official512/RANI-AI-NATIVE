@@ -2,7 +2,10 @@ package com.badshah222.rani.ai.features.home
 
 import android.Manifest
 import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
@@ -38,10 +41,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.webkit.WebView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.badshah222.rani.ai.BuildConfig
 import com.badshah222.rani.ai.RaniApp
 import com.badshah222.rani.ai.core.AwarenessMonitor
 import com.badshah222.rani.ai.core.FloatingOrbService
@@ -67,7 +70,6 @@ import com.badshah222.rani.ai.ui.stonic.StonicStatusBar
 import com.badshah222.rani.ai.ui.theme.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
 class HomeViewModel(app: Application) : AndroidViewModel(app) {
@@ -149,7 +151,10 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 FloatingOrbService.start(ctx)
                 c.store.floatingOrbEnabled = true
                 floatingOn.value = true
-            } else {
+            } else if (c.store.onboardingDone) {
+                // v1.8.0 §20.6.8: the onboarding (step 7) already asks for
+                // the overlay on first run — never double-ask. The one-time
+                // ask below only fires for users past onboarding.
                 needOverlayPermission.value = true
             }
         } else {
@@ -186,7 +191,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             val ctx = getApplication<Application>()
             if (Settings.canDrawOverlays(ctx)) {
                 FloatingOrbService.start(ctx)
-            } else if (!callOverlayAsked) {
+            } else if (!callOverlayAsked && c.store.onboardingDone) {
+                // v1.8.0 §20.6.8: gated on onboardingDone — the onboarding
+                // (step 7) already asks for the overlay on first run.
                 callOverlayAsked = true
                 needCallOverlayPermission.value = true
             }
@@ -254,19 +261,36 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             startLiveSession()
         }
     }
-    /** One manual retry after a failed auto-call (§19.1.4, same model only). */
-    fun retryAutoCall(micGranted: Boolean) { autoCallAttempted = false; autoCallCard.value = null; maybeAutoCall(micGranted) }
+    /** One manual retry after a failed auto-call (§19.1.4, same model only).
+     *  F5 (v1.8.0 fix): stop the stale call FIRST (idempotent — clears the
+     *  hero key so the stale WebView is disposed) before starting a fresh
+     *  one, so "Try again" never stacks a second socket on the old page.
+     *  No double-start: the 12 s launch gate + the `active && heroLiveKey`
+     *  guard in startLiveSession() still apply (the gate is cleared by the
+     *  LiveState.active collector the moment the call ends, long before the
+     *  user taps "Try again"). */
+    fun retryAutoCall(micGranted: Boolean) { stopLiveSession(); autoCallAttempted = false; autoCallCard.value = null; maybeAutoCall(micGranted) }
     fun dismissAutoCallCard() { autoCallCard.value = null }
 
     /** v1.7.0: mute/unmute the Live page mic from the hero or the floating
-     *  call card — forwarded to RaniLiveActivity, which calls
-     *  window.setRaniMuted(bool) on the page. */
+     *  call card — direct evaluateJavascript on the hero WebView (§20.1.4),
+     *  AND still broadcast so a stray RaniLiveActivity stays in sync.
+     *  F2 loop guard (v1.8.0 fix): the card already sets LiveState.muted
+     *  BEFORE it broadcasts, and this ViewModel's own receiver calls
+     *  setLiveMuted() — rebroadcasting unconditionally would re-trigger
+     *  our own receiver forever. The broadcast only goes out when the
+     *  value actually changes; the page push below always runs, so the
+     *  hero still mutes. */
     fun setLiveMuted(m: Boolean) {
+        val changed = LiveState.muted.value != m
         LiveState.setMuted(m)
-        runCatching {
-            getApplication<Application>().sendBroadcast(
-                Intent(RaniLiveActivity.ACTION_SET_LIVE_MUTED).putExtra(RaniLiveActivity.EXTRA_MUTED, m)
-            )
+        runCatching { heroWebView?.evaluateJavascript("window.setRaniMuted && setRaniMuted($m)", null) }
+        if (changed) {
+            runCatching {
+                getApplication<Application>().sendBroadcast(
+                    Intent(RaniLiveActivity.ACTION_SET_LIVE_MUTED).putExtra(RaniLiveActivity.EXTRA_MUTED, m)
+                )
+            }
         }
     }
 
@@ -279,6 +303,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         LiveState.setGlowColor(Emotions.glowColor(e))
         if (LiveState.active.value) {
             val colorHex = "#%06X".format(0xFFFFFF and e.color.toInt())
+            // v1.8.0 §20.1.4: push straight into the hero WebView too (the
+            // broadcast below only reaches RaniLiveActivity).
+            pushEmotionToHeroPage(e.id, e.label, colorHex, e.style)
             runCatching {
                 getApplication<Application>().sendBroadcast(
                     Intent(RaniLiveActivity.ACTION_SET_LIVE_EMOTION)
@@ -290,6 +317,23 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    /** v1.8.0 §20.1.4: push a newly detected emotion into the hero page —
+     *  same setRaniEmotion call RaniLiveActivity.pushEmotionToPage makes. */
+    private fun pushEmotionToHeroPage(id: String, label: String, colorHex: String, style: String) {
+        val wv = heroWebView ?: return
+        runCatching {
+            wv.evaluateJavascript(
+                "window.setRaniEmotion && setRaniEmotion('${jsEsc(id)}','${jsEsc(label)}','${jsEsc(colorHex)}','${jsEsc(style)}')",
+                null
+            )
+        }
+    }
+
+    /** Escape a string for a single-quoted JS literal (styles contain
+     *  apostrophes, e.g. "the user's mood"). */
+    private fun jsEsc(s: String): String = s
+        .replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ").replace("\r", " ")
     val screenRecordingOn = MutableStateFlow(c.store.screenRecordingEnabled)
     fun setScreenRecording(v: Boolean) { c.store.screenRecordingEnabled = v; screenRecordingOn.value = v }
     val voicePrintGateOn = MutableStateFlow(c.store.voicePrintGate)
@@ -333,7 +377,6 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     // in v1.6.1 (its state never becomes active). The real call lives in
     // RaniLiveActivity + the bundled page, and its state lives in the
     // shared LiveState singleton (see the init block below).
-    val liveFallback = MutableStateFlow<String?>(null)
     /** N-2: when a startLiveSession() launch began (ms, 0 = none). A second
      *  tap while a launch is in flight (key fetch can take up to 9 s) must
      *  not start a second fetch + Activity. The gate is TIME-BOUNDED
@@ -349,94 +392,104 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
      *  Requiring only the own key here blocked the pooled-key call for signed-in
      *  users. */
     fun liveAvailable(): Boolean = c.store.liveEnabled && (c.store.apiKey(Provider.GEMINI) != null || c.auth.current != null)
-    /** Live call entry — BADSHAH's WebView engine (v1.6.0, boss's order
-     *  2026-11-27). The call runs in RaniLiveActivity, a plain Activity
-     *  hosting the RANI Live page, which uses the browser's own `new
-     *  WebSocket` direct to Google Live — BADSHAH's exact way, the path that
-     *  works perfectly on the boss's phone while every native engine
-     *  (OkHttp / Java-WebSocket / HTTP relay, v1.1.0-v1.5.2) hung. Single
-     *  attempt, gemini-3.8-live only. If no key exists at all, liveFallback
-     *  fires and the call screen falls back to classic mode.
+    /** v1.8.0 §20.1.4 — NEW: the resolved key for the hero WebView. Set by
+     *  startLiveSession(); clearing it disposes the hero WebView (the call
+     *  ends). Null = no hero call. */
+    val heroLiveKey = MutableStateFlow<String?>(null)
+    /** The live hero WebView, handed over by HeroLiveWebView's update block
+     *  — Mute/End/emotion reach the page through it. Null when no hero call. */
+    @Volatile var heroWebView: WebView? = null
+    /** Selected Gemini Live voice name — always one of the female voices (Aoede default). */
+    val liveVoiceName: String get() = c.store.liveVoiceName
+    /** Live call entry — v1.8.0 §20.1: the call runs EMBEDDED in the home
+     *  hero (HeroLiveWebView, the bundled page, gemini-3.8-live only). No
+     *  separate call screen any more — startLiveSession() only resolves
+     *  the key (own first, pooled ≤9 s) and sets heroLiveKey; the hero
+     *  WebView loads the page itself. Single attempt, gemini-3.8-live
+     *  only. If no key exists at all, the §19.1.4 inline card shows
+     *  (autoCallCard "failed" when the auto-call attempted it).
      *  (No detectLiveModel pre-flight here — the page is the authority and
      *  shows its own error if the model does not run on the key.) */
-    /** N-2: bring the EXISTING Live call Activity forward instead of
-     *  starting a second one. Returns true when a live call Activity was
-     *  brought to the front; false when there is no live call to return
-     *  to (then the caller starts a fresh call). FLAG_ACTIVITY_REORDER_TO_FRONT
-     *  reuses the running instance — no onCreate, no second socket, no
-     *  second mic pipeline, no second greeting. The Activity's launchMode
-     *  stays standard on purpose: the Back/End flow (endCall + finish)
-     *  is untouched. */
-    fun bringLiveCallToFront(): Boolean {
-        if (!LiveState.active.value || !RaniLiveActivity.isAlive) return false
-        val intent = Intent(getApplication<Application>(), RaniLiveActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-        }
-        getApplication<Application>().startActivity(intent)
-        return true
-    }
     fun startLiveSession() {
-        // N-2: a call is ALREADY live (e.g. the user tapped the floating
-        // call card / avatar mid-call, which routes through VoiceScreen
-        // begin() → here) — NEVER start a second RaniLiveActivity with a
-        // second Live socket + mic pipeline on top of it. Bring the
-        // existing call forward instead. If the Activity is gone
-        // (isAlive false) the LiveState is stale and a fresh call starts
-        // below, as before.
-        if (bringLiveCallToFront()) return
+        // N-2: a hero call is ALREADY live — NEVER start a second Live
+        // socket + mic pipeline on top of it. The call IS on Home; there
+        // is no call Activity to bring forward any more (§20.1.4 —
+        // bringLiveCallToFront() is gone).
+        if (LiveState.active.value && heroLiveKey.value != null) return
         // N-2 (double-tap): a launch is already in flight (key fetch can
         // take up to 9 s for the pooled key) — a second tap must not start
-        // a second fetch + Activity. Time-bounded: a launch older than
-        // 12 s is stale (its Activity died mid-launch) and the tap
-        // proceeds as a fresh start instead of being swallowed.
+        // a second fetch. Time-bounded: a launch older than 12 s is stale
+        // and the tap proceeds as a fresh start instead of being swallowed.
         val nowMs = System.currentTimeMillis()
         if (liveLaunchAtMs != 0L && nowMs - liveLaunchAtMs < 12_000) return
         liveLaunchAtMs = nowMs
-        liveFallback.value = null
         viewModelScope.launch {
             // v1.5.2 key order kept: the user's OWN Gemini key first (proven
             // to work with Google Live); the pooled key (/api/live-key,
-            // Firebase-login gated) is the fallback, fetched on a worker
-            // thread (≤9 s) so the call screen never freezes.
+            // Firebase-login gated) is the fallback. F4 (v1.8.0 fix): the
+            // fetch runs in this ViewModel coroutine (Main) but is
+            // SUSPENDING — never blocking — so the UI never freezes.
+            // The old blocking call here froze Main up to ~9 s (ANR risk).
             val own = c.store.apiKey(Provider.GEMINI)
-            val key = own ?: runCatching {
-                runBlocking { withTimeoutOrNull(9_000) { c.worker.liveKey() } }
-            }.getOrNull()
+            val key = own ?: runCatching { withTimeoutOrNull(9_000) { c.worker.liveKey() } }.getOrNull()
             if (key.isNullOrBlank()) {
                 val reason = "Add your Google Gemini API key in Settings to use the real voice (or sign in so the pooled key can be used)."
-                liveFallback.value = reason
                 c.store.lastLiveError = reason
                 if (autoCallAttempted) autoCallCard.value = "failed"
                 liveLaunchAtMs = 0L
                 return@launch
             }
-            // N-2: mark the call starting BEFORE launching, so a second
-            // tap in the same second (double-tap on Voice Call / orb)
-            // cannot launch a second Activity either. Reset on failure.
+            // N-2: mark the call starting BEFORE setting the key, so a
+            // second tap in the same second cannot start a second fetch
+            // either. Reset on failure.
             LiveState.setState("connecting")
-            val intent = Intent(getApplication<Application>(), RaniLiveActivity::class.java).apply {
-                putExtra(RaniLiveActivity.EXTRA_KEY, key)
-                putExtra(RaniLiveActivity.EXTRA_VOICE, c.store.liveVoiceName)
-                putExtra(RaniLiveActivity.EXTRA_MODEL, "gemini-3.8-live")
-                putExtra(RaniLiveActivity.EXTRA_VER, BuildConfig.VERSION_NAME)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            runCatching { getApplication<Application>().startActivity(intent) }
-                .onFailure { liveLaunchAtMs = 0L; LiveState.onEnded() }
+            heroLiveKey.value = key
         }
     }
-    /** End the Live call: mark the shared state ended and tell the call
-     *  Activity to finish. Safe when the Activity is already gone — the
-     *  broadcast simply has no receiver then. (The dead HttpLiveSession
-     *  is NOT stopped here any more — S-7, it never ran in v1.6.1.) */
+    /** End the Live call: clear the hero key (the hero WebView is disposed)
+     *  + mark the shared state ended + broadcast ACTION_END_LIVE (harmless
+     *  if RaniLiveActivity is not running). Safe when the hero is already
+     *  gone. (The dead HttpLiveSession is NOT stopped here any more — S-7,
+     *  it never ran in v1.6.1.)
+     *  F2/F3 loop guard (v1.8.0 fix): this is called BY the ACTION_END_LIVE
+     *  receiver and by HeroLiveWebView.onDispose — rebroadcasting
+     *  unconditionally would re-trigger our own receiver forever. The
+     *  broadcast only goes out when a call was actually live (hero key set
+     *  or LiveState active). */
     fun stopLiveSession() {
+        val wasLive = heroLiveKey.value != null || LiveState.active.value
+        heroLiveKey.value = null
         LiveState.onEnded()
-        runCatching {
-            getApplication<Application>().sendBroadcast(Intent(RaniLiveActivity.ACTION_END_LIVE))
+        if (wasLive) {
+            runCatching {
+                getApplication<Application>().sendBroadcast(Intent(RaniLiveActivity.ACTION_END_LIVE))
+            }
         }
     }
     private var convoId: String? = null
     private var lastAction: PhoneAction? = null
+
+    /** F2 (v1.8.0 fix): the floating call card's Mute/End broadcasts had NO
+     *  receiver in the hero path — the ONLY receivers were in
+     *  RaniLiveActivity, which nothing launches any more (zero call sites),
+     *  so the card's Mute/End did nothing. These route the broadcasts to
+     *  the HERO (setLiveMuted / stopLiveSession). Registered on the
+     *  application context in init, unregistered in onCleared().
+     *  RaniLiveActivity's own receivers stay as-is — both firing on one
+     *  broadcast is harmless (the loop guards in setLiveMuted /
+     *  stopLiveSession keep a broadcast from re-triggering this receiver). */
+    private val liveMuteReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == RaniLiveActivity.ACTION_SET_LIVE_MUTED) {
+                setLiveMuted(intent.getBooleanExtra(RaniLiveActivity.EXTRA_MUTED, false))
+            }
+        }
+    }
+    private val liveEndReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == RaniLiveActivity.ACTION_END_LIVE) stopLiveSession()
+        }
+    }
 
     val charState: StateFlow<CharState> = combine(listening, speaking, busy, working, error) { l, s, b, w, e ->
         when { e != null -> CharState.Error; l -> CharState.Listening; b -> CharState.Thinking; w -> CharState.Working; s -> CharState.Speaking; else -> CharState.Idle }
@@ -449,10 +502,30 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         c.remoteConfig.refreshAsync(viewModelScope)
         // N-2: when the Live call ends, the launch gate opens again — the
         // next tap starts a fresh call. (While a call is live,
-        // startLiveSession() brings the existing Activity forward.)
+        // startLiveSession() returns at once — no second socket.)
         viewModelScope.launch {
             LiveState.active.collect { active -> if (!active) liveLaunchAtMs = 0L }
         }
+        // F5 (v1.8.0 fix): a page error bridges 'error' -> LiveState "error"
+        // (active=false), so the pill/caption/Mute/End vanish — but the hero
+        // key stays set and the page keeps retrying invisibly behind the
+        // hidden embed CSS. Show the native "failed" card. Do NOT dispose
+        // the page on first error — its retry loop is still running.
+        viewModelScope.launch {
+            LiveState.state.collect { s -> if (s == "error") autoCallCard.value = "failed" }
+        }
+        // F2 (v1.8.0 fix): route the floating call card's Mute/End
+        // broadcasts to the hero (see liveMuteReceiver / liveEndReceiver).
+        ContextCompat.registerReceiver(
+            getApplication(), liveMuteReceiver,
+            IntentFilter(RaniLiveActivity.ACTION_SET_LIVE_MUTED),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        ContextCompat.registerReceiver(
+            getApplication(), liveEndReceiver,
+            IntentFilter(RaniLiveActivity.ACTION_END_LIVE),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         // v1.7.0 §19.5 / S-7: the Live transcript (user speech + RANI replies,
         // fed by the page via RaniApp.onTranscript) drives the emotion DURING
         // the call — auto-detect on every user turn, no tap, no restart.
@@ -699,7 +772,12 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun newChat() { convoId = null; messages.value = emptyList(); if (uid.isNotEmpty()) c.chats.clear(uid); c.tts.stop() }
     fun stopSpeaking() = c.tts.stop()
-    override fun onCleared() { c.speech.stop() }
+    override fun onCleared() {
+        // F2: unregister the floating-card Mute/End receivers.
+        runCatching { getApplication<Application>().unregisterReceiver(liveMuteReceiver) }
+        runCatching { getApplication<Application>().unregisterReceiver(liveEndReceiver) }
+        c.speech.stop()
+    }
 }
 
 /** Short human label for the assistant's current state. */
@@ -769,6 +847,8 @@ fun HomeScreen(
     val liveCaption by LiveState.caption.collectAsState()
     val liveCaptionWho by LiveState.captionWho.collectAsState()
     val liveMuted by LiveState.muted.collectAsState()
+    // v1.8.0 §20.1.4: the hero key (null = no hero call).
+    val heroKey by vm.heroLiveKey.collectAsState()
     // §19.8.4: the hero glow follows the auto-detected emotion's colour,
     // cross-fading over ~600 ms when the feeling changes.
     val glowColor by animateColorAsState(Emotions.glowColor(emotion), animationSpec = tween(600), label = "heroGlow")
@@ -896,22 +976,30 @@ fun HomeScreen(
 
             Text(vm.greeting, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = VioletSoft, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 
-            // ---- Centre: the character, full figure (never circular) ----
-            // §19.8: the glow behind her is the emotion's colour (§19.8.4);
-            // the character itself breathes/pulses with the Live state.
+            // ---- Centre: v1.8.0 §20.2 correction (2026-11-27) — the hero
+            // character stays the holographic girl-form (RaniCharacter,
+            // full figure); the dot field is NOT in the hero, it lives
+            // only in the bottom-circle floating overlay view.
+            // The transparent hero WebView (§20.1) is layered on top of
+            // the girl-form in the same 320 dp box so the call runs inside
+            // the hero. The §19.8 emotion glow stays behind her as the halo.
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Box(
                     Modifier.size(300.dp)
                         .background(Brush.radialGradient(listOf(glowColor.copy(alpha = 0.30f), Color.Transparent)))
                 )
-                RaniCharacter(
-                    heroState, level, vm.lowPower,
-                    Modifier.fillMaxWidth().height(320.dp).clickable { tapToTalk() },
-                    fullFigure = true,
-                    liveState = if (liveActive) liveState else "idle",
-                    glowColor = glowColor,
-                    energy = Emotions.energy(emotion),
-                )
+                Box(Modifier.fillMaxWidth().height(320.dp)) {
+                    RaniCharacter(heroState, level, vm.lowPower, Modifier.fillMaxWidth().height(320.dp).clickable { tapToTalk() }, fullFigure = true, liveState = liveState, glowColor = glowColor, energy = Emotions.energy(emotion))
+                    heroKey?.let { key ->
+                        HeroLiveWebView(
+                            heroKey = key,
+                            voice = vm.liveVoiceName,
+                            onWebView = { vm.heroWebView = it },
+                            onPageEnded = { vm.stopLiveSession() },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
             }
             // ---- §19.8.3 status pill (Stonic-style) + §19.1 caption + Mute/End ----
             // While a call is live the pill replaces the generic status bar so

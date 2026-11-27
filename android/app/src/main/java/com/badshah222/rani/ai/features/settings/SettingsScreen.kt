@@ -254,7 +254,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () -> Unit, onPermissions: () -> Unit) {
+fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () -> Unit, onPermissions: () -> Unit, onSetupAgain: () -> Unit = {}) {
     val ctx = LocalContext.current
     val provider by vm.provider.collectAsState(); val models by vm.models.collectAsState(); val selModel by vm.selectedModel.collectAsState()
     val keySaved by vm.keySaved.collectAsState(); val aiMsg by vm.aiMsg.collectAsState(); val testing by vm.testing.collectAsState()
@@ -514,6 +514,8 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
 
             item { Section("App settings", Icons.Default.Tune) {
                 OutlinedButton(onPermissions) { Text("Permissions") }
+                // v1.8.0 §20.3: re-open the one-question onboarding any time.
+                OutlinedButton(onSetupAgain) { Text("Set up again") }
                 OutlinedButton({ session.signOut() }) { Text("Sign out") }
                 Text("RANI AI GF v${com.badshah222.rani.ai.BuildConfig.VERSION_NAME} — BADSHAH222", style = MaterialTheme.typography.bodySmall, color = Mute)
             } }

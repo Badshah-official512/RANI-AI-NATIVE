@@ -30,19 +30,22 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
     }
 
     /**
-     * Detects which Live model this key offers — new order (Nov 2026):
-     * 3.8 Live first (the default), then 3.8 Live Extended Thinking,
-     * then 2.5 Flash Native Audio (GA).
-     * Stores both the model key (e.g. "3.8") and the model id. Returns the
-     * model id, or null when the key offers no Live model — the app then
-     * uses the classic voice mode.
+     * Detects which Live model this key offers — BINDING ORDER (2026-11-26
+     * 20:17 PKT): ONLY gemini-3.8-live, one request, no other models.
+     * Returns "gemini-3.8-live" when the key offers it, null otherwise —
+     * never stores another model id. Stores both the model key ("3.8")
+     * and the model id. Returns null when the key offers no Live model —
+     * the app then uses the classic voice mode.
      */
     suspend fun detectLiveModel(): String? {
         val key = store.apiKey(Provider.GEMINI) ?: return null
         val gemini = clients.getValue(Provider.GEMINI) as GeminiClient
         val live = runCatching { gemini.listLiveModels(key) }.getOrDefault(emptyList())
         store.liveCandidates = live.joinToString(",")
-        val picked = LiveModels.firstAvailable(live)
+        // F6 (v1.8.0 fix): accept ONLY gemini-3.8-live — LiveModels.all has
+        // a single entry, and the takeIf below makes the acceptance explicit
+        // here too, so no other model id can ever be stored.
+        val picked = LiveModels.firstAvailable(live)?.takeIf { it.modelId == "gemini-3.8-live" }
         store.liveModelKey = picked?.key ?: LiveModels.DEFAULT_KEY
         store.liveModel = picked?.modelId
         return picked?.modelId

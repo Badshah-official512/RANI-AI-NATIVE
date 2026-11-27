@@ -8,9 +8,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
-import android.media.AudioAttributes
-import android.media.AudioFocusRequest
-import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -18,7 +15,6 @@ import android.provider.Settings
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -34,11 +30,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.badshah222.rani.ai.RaniApp
-import com.badshah222.rani.ai.core.CallService
 import com.badshah222.rani.ai.core.FloatingOrbService
 import com.badshah222.rani.ai.core.LiveState
-import com.badshah222.rani.ai.core.RaniAccessibilityService
-import com.badshah222.rani.ai.data.phone.ContactsHelper
+import com.badshah222.rani.ai.core.RaniLiveBridge
 import java.net.URLEncoder
 
 /**
@@ -114,8 +108,10 @@ class RaniLiveActivity : ComponentActivity() {
     private var triedReload = false
     private var liveUrl = ""
 
-    /** Held audio-focus request (BADSHAH micTakeover pattern) — released by micRelease(). */
-    private var audioFocusReq: AudioFocusRequest? = null
+    /** v1.8.0 §20.1.3 — the shared bridge (same class the hero WebView
+     *  uses). Created in onCreate; the mic takeover/release + phone-action
+     *  dispatcher live in it now. */
+    private lateinit var bridge: RaniLiveBridge
 
     /** True once the page's Live socket completed setup (window.RaniApp.onLiveConnected). */
     @Volatile private var liveConnected = false
@@ -174,7 +170,7 @@ class RaniLiveActivity : ComponentActivity() {
         val key = intent.getStringExtra(EXTRA_KEY) ?: ""
         val voice = intent.getStringExtra(EXTRA_VOICE) ?: "Aoede"
         val model = intent.getStringExtra(EXTRA_MODEL) ?: "gemini-3.8-live"
-        val ver = intent.getStringExtra(EXTRA_VER) ?: "1.6.1"
+        val ver = intent.getStringExtra(EXTRA_VER) ?: "1.8.0"
         liveUrl = "$LIVE_URL?key=" + URLEncoder.encode(key, "UTF-8") +
             "&voice=" + URLEncoder.encode(voice, "UTF-8") +
             "&model=" + URLEncoder.encode(model, "UTF-8") +
@@ -218,7 +214,16 @@ class RaniLiveActivity : ComponentActivity() {
                 loadWithOverviewMode = true
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) safeBrowsingEnabled = true
             }
-            addJavascriptInterface(RaniBridge(), "RaniApp")
+            // v1.8.0 §20.1.3: the shared bridge — same class the hero
+            // WebView uses, so the two paths cannot drift. Callbacks keep
+            // this Activity's behaviour exactly as before.
+            bridge = RaniLiveBridge(
+                this,
+                onConnected = { liveConnected = true; ensureCallOverlay() },
+                onMinimizeRequested = { minimizeCall() },
+                onEnded = { finish() },
+            )
+            addJavascriptInterface(bridge, "RaniApp")
             CookieManager.getInstance().setAcceptCookie(true)
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
@@ -296,183 +301,10 @@ class RaniLiveActivity : ComponentActivity() {
         }
     }
 
-    /** JS bridge (window.RaniApp) — the Live page calls these. */
-    inner class RaniBridge {
-        @JavascriptInterface
-        fun onLiveConnected() {
-            liveConnected = true
-            LiveState.onConnected()
-            // B-1(a): a Live call has started — the floating service starts
-            // now so the call card is ready the moment the user leaves the
-            // call screen. While this Activity is in front the service hides
-            // both the card and the avatar (callInForeground, §19.3).
-            ensureCallOverlay()
-        }
-
-        @JavascriptInterface
-        fun onCallEnded() {
-            LiveState.onEnded()
-            runOnUiThread { finish() }
-        }
-
-        /** v1.7.0: live state word from the page — "connecting" | "listening"
-         *  | "speaking" | "thinking" | "error" | "ended". Feeds LiveState,
-         *  which the hero, the status pill, the character animation and the
-         *  floating card all read. */
-        @JavascriptInterface
-        fun onLiveState(state: String) {
-            LiveState.setState(state)
-        }
-
-        /** v1.7.0: latest caption line from the page (who = "RANI" or "Babu Jaan"). */
-        @JavascriptInterface
-        fun onLiveCaption(who: String, text: String) {
-            LiveState.setCaption(who, text)
-        }
-
-        /** v1.7.0: page mute state (true = muted). */
-        @JavascriptInterface
-        fun onLiveMuted(muted: Boolean) {
-            LiveState.setMuted(muted)
-        }
-
-        /** v1.7.0: a full transcript turn — user speech ("user") or RANI's
-         *  reply ("assistant"). HomeViewModel reads this to auto-detect the
-         *  emotion DURING the call, with no tap and no restart. */
-        @JavascriptInterface
-        fun onTranscript(who: String, text: String) {
-            LiveState.onTranscript(who, text)
-        }
-
-        /** v1.7.0 B-2 — ONE dispatcher for every Live function call. The
-         *  page's tool handler calls this with the tool name + its args as
-         *  a JSON object; the result string goes straight back to the model
-         *  as the toolResponse. Actions run through the accessibility
-         *  service when it is on; the pure-intent actions (open an app,
-         *  YouTube/Chrome search, WhatsApp) fall back to plain intents from
-         *  this Activity, because they need no accessibility API at all —
-         *  the chat path already opens apps the same way. Type/tap/scroll/
-         *  read DO need the service and report "noaccessibility" without
-         *  it, so a command never silently does nothing (§19.9.5).
-         *  sendWhatsApp only ever opens a wa.me DRAFT — the user presses
-         *  Send himself; nothing here taps Send. */
-        @JavascriptInterface
-        fun raniPhoneAction(action: String, argsJson: String): String {
-            val args = runCatching { org.json.JSONObject(argsJson.ifBlank { "{}" }) }.getOrNull()
-                ?: return "fail"
-            fun s(vararg keys: String): String {
-                for (k in keys) { val v = args.optString(k, ""); if (v.isNotEmpty()) return v }
-                return ""
-            }
-            val svc = RaniAccessibilityService.instance
-            return try {
-                when (action) {
-                    "open_app" -> svc?.openApp(s("packageName", "app")) ?: intentOpenApp(s("packageName", "app"))
-                    "search_youtube", "open_youtube" -> svc?.searchYouTube(s("query")) ?: intentSearchYouTube(s("query"))
-                    "search_chrome" -> svc?.searchChrome(s("query")) ?: intentSearchChrome(s("query"))
-                    "open_whatsapp" -> svc?.openWhatsApp() ?: intentOpenApp("com.whatsapp").let {
-                        if (it == "ok") "ok" else intentOpenApp("com.whatsapp.w4b")
-                    }
-                    "send_whatsapp" -> svc?.sendWhatsApp(s("contact", "to", "target"), s("message"))
-                        ?: intentSendWhatsApp(s("contact", "to", "target"), s("message"))
-                    "type_text" -> svc?.typeText(s("text")) ?: "noaccessibility"
-                    "tap_on_screen" -> svc?.tapText(s("text", "label")) ?: "noaccessibility"
-                    "scroll_screen" -> svc?.scroll(s("direction")) ?: "noaccessibility"
-                    "press_back" -> svc?.goBack() ?: "noaccessibility"
-                    "go_home" -> svc?.goHome() ?: "noaccessibility"
-                    "read_screen" -> svc?.readScreen() ?: "noaccessibility"
-                    "end_call" -> "ok" // the page ends the call itself, after the toolResponse is sent
-                    else -> "unknown"
-                }
-            } catch (e: Exception) { "fail" }
-        }
-
-        /** v1.7.0 B-1(c): the call page's Minimize button. The real call
-         *  screen can now ask for the overlay permission once and drop to
-         *  the floating call card — previously minimizeCall() only existed
-         *  in HomeViewModel and only VoiceScreen called it. */
-        @JavascriptInterface
-        fun onMinimize() {
-            runOnUiThread { minimizeCall() }
-        }
-        @JavascriptInterface
-        fun openApp(packageName: String): String =
-            RaniAccessibilityService.instance?.openApp(packageName) ?: "noaccessibility"
-
-        @JavascriptInterface
-        fun searchYouTube(query: String): String =
-            RaniAccessibilityService.instance?.searchYouTube(query) ?: "noaccessibility"
-
-        @JavascriptInterface
-        fun searchChrome(query: String): String =
-            RaniAccessibilityService.instance?.searchChrome(query) ?: "noaccessibility"
-
-        /** Opens the WhatsApp chat with the message drafted — the user
-         *  presses Send himself. Never auto-sends from the call page. */
-        @JavascriptInterface
-        fun sendWhatsApp(contactOrNumber: String, message: String): String =
-            RaniAccessibilityService.instance?.sendWhatsApp(contactOrNumber, message) ?: "noaccessibility"
-
-        @JavascriptInterface
-        fun openWhatsApp(): String =
-            RaniAccessibilityService.instance?.openWhatsApp() ?: "noaccessibility"
-
-        @JavascriptInterface
-        fun scrollPhone(dir: String): String =
-            RaniAccessibilityService.instance?.scroll(dir) ?: "noaccessibility"
-
-        @JavascriptInterface
-        fun typeText(text: String): String =
-            RaniAccessibilityService.instance?.typeText(text) ?: "noaccessibility"
-
-        /** Screen text, on-device only — used to answer the current question,
-         *  never stored or uploaded. */
-        @JavascriptInterface
-        fun readScreen(): String =
-            RaniAccessibilityService.instance?.readScreen() ?: ""
-
-        @JavascriptInterface
-        fun micTakeover() {
-            // BADSHAH's BadshahBridge.micTakeover (v6.6 MIC CHHEEN-LO): audio
-            // focus + MODE_IN_COMMUNICATION so the system frees the mic for
-            // the WebView's getUserMedia, speaker ON, and the foreground
-            // CallService keeps the call alive if the Activity backgrounds.
-            runOnUiThread {
-                try {
-                    val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                    am.mode = AudioManager.MODE_IN_COMMUNICATION
-                    val attrs = AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
-                    val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-                        .setAudioAttributes(attrs)
-                        .setOnAudioFocusChangeListener { }
-                        .build()
-                    audioFocusReq = req
-                    am.requestAudioFocus(req)
-                    @Suppress("DEPRECATION") am.isSpeakerphoneOn = true
-                } catch (e: Exception) { }
-                try { CallService.start(this@RaniLiveActivity) } catch (e: Exception) { }
-            }
-        }
-
-        @JavascriptInterface
-        fun micRelease() {
-            runOnUiThread { releaseMicNative() }
-        }
-    }
-
-    /** Shared mic-release logic (called by the JS bridge and by onDestroy). */
+    /** Shared mic-release logic (called by the JS bridge and by onDestroy)
+     *  — now in the shared bridge (§20.1.3); this only delegates. */
     private fun releaseMicNative() {
-        try {
-            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            audioFocusReq?.let { runCatching { am.abandonAudioFocusRequest(it) } }
-            audioFocusReq = null
-            @Suppress("DEPRECATION") am.isSpeakerphoneOn = false
-            am.mode = AudioManager.MODE_NORMAL
-        } catch (e: Exception) { }
-        try { CallService.stop(this@RaniLiveActivity) } catch (e: Exception) { }
+        if (::bridge.isInitialized) runCatching { bridge.releaseMic() }
     }
 
     /** End the call from native code (Back press, stopLiveSession). */
@@ -534,81 +366,6 @@ class RaniLiveActivity : ComponentActivity() {
         } else {
             moveTaskToBack(true)
         }
-    }
-
-    /** Plain-intent fallbacks for the phone actions that need no
-     *  accessibility API (B-2) — the same intents the chat path already
-     *  fires. Each returns the same status strings as the service. */
-    private fun intentOpenApp(packageName: String): String {
-        val q = packageName.trim()
-        if (q.isEmpty()) return "fail"
-        return try {
-            val pm = packageManager
-            var intent = runCatching { pm.getLaunchIntentForPackage(q) }.getOrNull()
-            if (intent == null) {
-                val apps = runCatching { pm.getInstalledApplications(0) }.getOrNull() ?: emptyList()
-                val hit = apps.firstOrNull {
-                    runCatching { pm.getApplicationLabel(it).toString() }.getOrNull()?.equals(q, ignoreCase = true) == true ||
-                        it.packageName.contains(q.lowercase().replace(" ", ""), ignoreCase = true)
-                }
-                intent = hit?.let { runCatching { pm.getLaunchIntentForPackage(it.packageName) }.getOrNull() }
-            }
-            if (intent == null) return "notfound"
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-            "ok"
-        } catch (e: Exception) { "fail" }
-    }
-
-    private fun intentSearchYouTube(query: String): String {
-        val q = query.trim()
-        if (q.isEmpty()) return intentOpenApp("com.google.android.youtube")
-        return try {
-            val url = "https://www.youtube.com/results?search_query=" + URLEncoder.encode(q, "UTF-8")
-            val i = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                setPackage("com.google.android.youtube")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            runCatching { startActivity(i); return "ok" }
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            "ok"
-        } catch (e: Exception) { "fail" }
-    }
-
-    private fun intentSearchChrome(query: String): String {
-        val q = query.trim()
-        return try {
-            val url = if (q.isEmpty()) "https://www.google.com"
-                else "https://www.google.com/search?q=" + URLEncoder.encode(q, "UTF-8")
-            val i = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                setPackage("com.android.chrome")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            runCatching { startActivity(i); return "ok" }
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            "ok"
-        } catch (e: Exception) { "fail" }
-    }
-
-    /** WhatsApp draft via wa.me (mirrors the service): the chat opens with
-     *  the message drafted — the user presses Send himself. Never auto-sends. */
-    private fun intentSendWhatsApp(contactOrNumber: String, message: String): String {
-        val target = contactOrNumber.trim()
-        if (target.isEmpty()) return "fail"
-        return try {
-            val digitsOnly = target.matches(Regex("^[+]?[0-9][0-9 \\-]{5,}$"))
-            val number = if (digitsOnly) target.replace(" ", "").replace("-", "")
-            else {
-                val entry = runCatching { ContactsHelper.findBest(this, target) }.getOrNull()
-                    ?: return "notfound"
-                runCatching { ContactsHelper.bestNumber(entry) }.getOrNull() ?: return "notfound"
-            }
-            val e164 = runCatching { ContactsHelper.toE164(this, number) }.getOrNull() ?: number
-            var url = "https://wa.me/" + e164.removePrefix("+")
-            if (message.isNotBlank()) url += "?text=" + URLEncoder.encode(message, "UTF-8")
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            "ok"
-        } catch (e: Exception) { "fail" }
     }
 
     override fun onResume() {

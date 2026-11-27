@@ -52,13 +52,14 @@ import kotlin.random.Random
 /**
  * The full-screen voice call. Primary engine: Gemini Live — a real-time conversation
  * in a natural human voice, with the full-figure character on screen and a small
- * voice-pulse orb as the level indicator. The real call runs in RaniLiveActivity
- * (the bundled page, v1.6.1 engine); this screen mirrors the shared LiveState
- * fed by the page bridge — it does NOT read the dead HttpLiveSession any more
- * (S-7). If Live is unavailable for this phone/key, it quietly falls back to
- * the classic listen → think → speak mode and says so once, instead of looping
- * errors. The voice-print gate runs once at the start (requestLive / requestCall)
- * — never on every turn.
+ * voice-pulse orb as the level indicator. v1.8.0 §20.1: the real call runs in
+ * the Home hero (HeroLiveWebView, the bundled page, v1.6.1 engine); this screen
+ * starts it via HomeViewModel.startLiveSession() and navigates back to Home.
+ * It mirrors the shared LiveState fed by the page bridge — it does NOT read the
+ * dead HttpLiveSession any more (S-7). If Live is unavailable for this phone/key,
+ * it quietly falls back to the classic listen → think → speak mode and says so
+ * once, instead of looping errors. The voice-print gate runs once at the start
+ * (requestLive / requestCall) — never on every turn.
  */
 @Composable
 fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
@@ -71,7 +72,6 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     val liveMuted by LiveState.muted.collectAsState()
     val liveCaption by LiveState.caption.collectAsState()
     val liveCaptionWho by LiveState.captionWho.collectAsState()
-    val fallback by vm.liveFallback.collectAsState()
     val emotion by vm.emotion.collectAsState()
     val inCall by vm.inCall.collectAsState(); val callMuted by vm.callMuted.collectAsState()
 
@@ -85,17 +85,15 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
 
     fun begin() {
         if (started) return; started = true
-        // N-2: a call is already live (e.g. the user tapped the floating
-        // call card / avatar mid-call and landed back on this screen) —
-        // NEVER start a second Live session. Bring the existing call
-        // Activity forward instead; startLiveSession() does the same
-        // check, this one keeps the screen itself from even trying.
-        if (LiveState.active.value && vm.bringLiveCallToFront()) return
-        // The Live call runs in RaniLiveActivity (the bundled page, BADSHAH's
-        // proven WebView engine, v1.6.1) — no web page, no HTTP engine.
-        // startLiveSession() launches that Activity; the classic call is
-        // the fallback when Live cannot run.
-        if (liveMode) vm.startLiveSession() else vm.requestCall()
+        // v1.8.0 §20.1.4: the call lives on the Home hero — start it, then
+        // go back to Home where it runs. A call already live needs nothing
+        // more than the trip back to Home (no second socket, no second
+        // WebView — startLiveSession() guards that too). The classic call
+        // (liveMode false) still runs on this screen as before.
+        if (liveMode) {
+            if (!LiveState.active.value) vm.startLiveSession()
+            onBack()
+        } else vm.requestCall()
     }
     val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) begin() else vm.status.value = "Microphone permission denied. Open Permissions to enable it."
@@ -103,14 +101,6 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     LaunchedEffect(Unit) {
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) begin()
         else micPerm.launch(Manifest.permission.RECORD_AUDIO)
-    }
-    // Live could not run → switch to classic mode once, no error loop.
-    LaunchedEffect(fallback) {
-        if (fallback != null && liveMode) {
-            liveMode = false
-            vm.status.value = fallback!!
-            if (started) { vm.beginCall(); vm.startListening() }
-        }
     }
     // Classic call loop: if the recognizer drops, reopen the mic at once — the call stays
     // alive, listening and replying turn by turn, until the Boss himself presses End.
@@ -263,13 +253,6 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
                         Box(Modifier.padding(horizontal = 3.dp).size(5.dp, h.dp).background(if (i % 2 == 0) emotion.composeColor else CyanAcc, RoundedCornerShape(3.dp)))
                     }
                 }
-            }
-            if (!liveMode && fallback != null) {
-                Text(
-                    "Why Live voice did not start: $fallback",
-                    Modifier.fillMaxWidth().padding(top = 10.dp).background(Bad.copy(alpha = 0.15f), RoundedCornerShape(10.dp)).padding(10.dp),
-                    textAlign = TextAlign.Center, color = Bad, style = MaterialTheme.typography.bodySmall,
-                )
             }
             if (transcript.isNotEmpty()) Text(transcript, Modifier.fillMaxWidth().padding(top = 10.dp), textAlign = TextAlign.Center, color = VioletSoft, style = MaterialTheme.typography.bodyMedium, maxLines = 3)
             Spacer(Modifier.weight(1f))

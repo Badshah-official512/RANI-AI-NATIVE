@@ -11,6 +11,7 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.badshah222.rani.ai.core.AgentService
 import com.badshah222.rani.ai.core.FloatingOrbService
+import com.badshah222.rani.ai.features.home.HeroMicPermission
 import com.badshah222.rani.ai.ui.AppNav
 import com.badshah222.rani.ai.ui.theme.RaniTheme
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -69,5 +70,14 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         wakeVoiceFlow.value = intent.getStringExtra("EXTRA_WAKE") == "1"
+    }
+
+    /** v1.8.0 §20.1.2: the hero WebView lives in this Activity now (not in
+     *  RaniLiveActivity), so its hold-and-grant mic permission result
+     *  arrives here — delegate it to the HeroLiveWebView holder (same
+     *  REQ code + grant-mapping as RaniLiveActivity, REQ_WEB = 45). */
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        HeroMicPermission.handleResult(this, requestCode, permissions, grantResults)
     }
 }
