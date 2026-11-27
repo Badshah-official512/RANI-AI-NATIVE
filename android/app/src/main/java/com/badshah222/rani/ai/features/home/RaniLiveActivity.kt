@@ -217,8 +217,10 @@ class RaniLiveActivity : ComponentActivity() {
             // v1.8.0 §20.1.3: the shared bridge — same class the hero
             // WebView uses, so the two paths cannot drift. Callbacks keep
             // this Activity's behaviour exactly as before.
+            // FIX (CI run #41): `this` here is the WebView (apply receiver),
+            // not the Activity — the bridge needs a Context, so qualify it.
             bridge = RaniLiveBridge(
-                this,
+                this@RaniLiveActivity,
                 onConnected = { liveConnected = true; ensureCallOverlay() },
                 onMinimizeRequested = { minimizeCall() },
                 onEnded = { finish() },
