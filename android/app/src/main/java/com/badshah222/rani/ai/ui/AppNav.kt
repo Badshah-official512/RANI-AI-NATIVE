@@ -1,6 +1,8 @@
 package com.badshah222.rani.ai.ui
 
 import android.app.Activity
+import androidx.compose.foundation.background // FIX (CI run #46): missing import — .background() used in InAppCallBar (line 221)
+import androidx.compose.foundation.border // FIX (CI run #46): missing import — .border() used in InAppCallBar (line 222); added now to pre-empt the next error in the same chain
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
