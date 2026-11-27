@@ -2,7 +2,13 @@ package com.badshah222.rani.ai
 
 import android.app.Application
 import android.app.NotificationManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import com.badshah222.rani.ai.core.AppResolver
 import com.badshah222.rani.ai.core.AwarenessMonitor
+import com.badshah222.rani.ai.core.MemoryStore
 import com.badshah222.rani.ai.core.RaniRemoteConfig
 import com.badshah222.rani.ai.core.SecureStore
 import com.badshah222.rani.ai.data.ai.AiRepository
@@ -33,7 +39,11 @@ class Container(app: Application) {
     // Remote config comes before the AI repo: the panel's Gemini model is the
     // fallback when the user has not picked a model yet.
     val remoteConfig = RaniRemoteConfig(store, cloud)
-    val ai = AiRepository(store, cloud, remoteConfig, worker)
+    // v1.9.0 §21.2 — ONE long-term memory system (on-device encrypted
+    // store + best-effort Supabase sync). Created before the AI repo so
+    // the chat system prompt can carry the recall block.
+    val memory = MemoryStore(app, store, cloud) { auth.current?.uid }
+    val ai = AiRepository(store, cloud, remoteConfig, worker, memory)
     val tts = TtsManager(app, store, cloud)
     val speech = SpeechInput(app)
     val live = LiveSession(app, store, worker)
@@ -62,6 +72,20 @@ class RaniApp : Application() {
         container.tts.init()
         // Awareness follows the on-device toggle; the admin panel can override it via remote config.
         AwarenessMonitor.enabled = container.store.awarenessEnabled
+        // v1.9.0 §21.1 — the AppResolver's installed-app cache is
+        // invalidated when an app is installed / removed / updated.
+        val pkgReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) { AppResolver.invalidate() }
+        }
+        val pkgFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addDataScheme("package")
+        }
+        androidx.core.content.ContextCompat.registerReceiver(
+            this, pkgReceiver, pkgFilter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         // Best-effort remote config load (fail-soft: defaults apply when the table is not there yet).
         container.remoteConfig.refreshAsync(appScope)
     }

@@ -154,6 +154,13 @@ fun CameraViewScreen(vm: CameraViewModel, onBack: () -> Unit) {
     val bossMatched by vm.bossMatched.collectAsState()
     val error by vm.error.collectAsState()
     val recording by vm.recording.collectAsState()
+    // v1.9.0 §21.3 — while Awareness is SEEING, this screen shows the live
+    // feed WITH her running description of what she sees (the Live caption
+    // from the frames she was just sent). Ask her "what do you see?"
+    // mid-call and she answers from the camera.
+    val visionState by com.badshah222.rani.ai.core.AwarenessCamera.visionState.collectAsState()
+    val liveCaption by com.badshah222.rani.ai.core.LiveState.caption.collectAsState()
+    val liveCaptionWho by com.badshah222.rani.ai.core.LiveState.captionWho.collectAsState()
     var hasCam by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -313,6 +320,23 @@ fun CameraViewScreen(vm: CameraViewModel, onBack: () -> Unit) {
                     colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(14.dp)
                 ) {
                     Text(it, Modifier.padding(14.dp), style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+            // v1.9.0 §21.3 — her running description while Awareness is seeing.
+            if (visionState == "seeing") {
+                Card(
+                    Modifier.fillMaxWidth().padding(top = 10.dp),
+                    colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF4ADE80)),
+                ) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("RANI is seeing — front camera", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = Color(0xFF4ADE80))
+                        Text(
+                            if (liveCaption.isNotBlank()) (if (liveCaptionWho.isNotBlank()) "$liveCaptionWho: " else "") + liveCaption
+                            else "She is watching through this camera right now. Ask her \"what do you see?\"",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                 }
             }
 

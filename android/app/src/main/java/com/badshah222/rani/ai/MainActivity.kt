@@ -10,6 +10,8 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.badshah222.rani.ai.core.AgentService
+import com.badshah222.rani.ai.core.CallEngine
+import com.badshah222.rani.ai.core.CallEngineHolder
 import com.badshah222.rani.ai.core.FloatingOrbService
 import com.badshah222.rani.ai.features.home.HeroMicPermission
 import com.badshah222.rani.ai.ui.AppNav
@@ -33,10 +35,17 @@ class MainActivity : ComponentActivity() {
         val wakeVoiceFlow = MutableStateFlow(false)
     }
 
+    /** v1.9.0 §21.4 — the persistent call engine, owned by this Activity.
+     *  Created once in onCreate; the hero slot only hosts its WebView. */
+    lateinit var callEngine: CallEngine
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        callEngine = CallEngine(this)
+        CallEngineHolder.engine = callEngine
+        CallEngineHolder.activity = this
         AgentService.start(this)
         // v1.7.0 B-1(b) cold start: Live Voice ON + overlay granted → the
         // floating service starts now, so the avatar appears when the app is
@@ -72,10 +81,18 @@ class MainActivity : ComponentActivity() {
         wakeVoiceFlow.value = intent.getStringExtra("EXTRA_WAKE") == "1"
     }
 
+    override fun onDestroy() {
+        runCatching { callEngine.shutdown() }
+        CallEngineHolder.engine = null
+        CallEngineHolder.activity = null
+        super.onDestroy()
+    }
+
     /** v1.8.0 §20.1.2: the hero WebView lives in this Activity now (not in
      *  RaniLiveActivity), so its hold-and-grant mic permission result
-     *  arrives here — delegate it to the HeroLiveWebView holder (same
-     *  REQ code + grant-mapping as RaniLiveActivity, REQ_WEB = 45). */
+     *  arrives here — delegate it to the HeroMicPermission holder (same
+     *  REQ code + grant-mapping as RaniLiveActivity, REQ_WEB = 45).
+     *  v1.9.0: the WebView lives in CallEngine; the flow is unchanged. */
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         HeroMicPermission.handleResult(this, requestCode, permissions, grantResults)

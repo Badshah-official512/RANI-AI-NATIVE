@@ -1,5 +1,6 @@
 package com.badshah222.rani.ai.data.ai
 
+import com.badshah222.rani.ai.core.MemoryStore
 import com.badshah222.rani.ai.core.RaniRemoteConfig
 import com.badshah222.rani.ai.core.SecureStore
 import com.badshah222.rani.ai.data.supabase.SupabaseApi
@@ -15,7 +16,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Provider switching + per-user keys + usage reporting. There is NO shared developer key anywhere. Chat runs only on the user's own keys (Gemini / Groq / OpenRouter). */
-class AiRepository(private val store: SecureStore, private val cloud: SupabaseApi, private val remoteConfig: RaniRemoteConfig? = null, private val worker: WorkerApi? = null) {
+class AiRepository(private val store: SecureStore, private val cloud: SupabaseApi, private val remoteConfig: RaniRemoteConfig? = null, private val worker: WorkerApi? = null, private val memory: MemoryStore? = null) {
     private val clients = mapOf(Provider.GEMINI to GeminiClient(), Provider.GROQ to GroqClient(), Provider.OPENROUTER to OpenRouterClient())
     private fun client(p: Provider) = clients.getValue(p)
 
@@ -52,13 +53,21 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
     }
 
     /** The composed system instruction for the current personality + emotion + identity settings. */
-    fun systemPrompt(emotionStyle: String): String = SystemPrompt.build(
-        Personalities.fromId(store.personalityId).prompt,
-        emotionStyle,
-        store.language,
-        store.assistantName,
-        store.responseStyle,
-    )
+    fun systemPrompt(emotionStyle: String): String {
+        val base = SystemPrompt.build(
+            Personalities.fromId(store.personalityId).prompt,
+            emotionStyle,
+            store.language,
+            store.assistantName,
+            store.responseStyle,
+        )
+        // v1.9.0 §21.2 — the MEMORY block: same recall block the Live call
+        // gets via &memory=. Omitted entirely when memory is empty.
+        val recall = memory?.buildRecallBlock().orEmpty()
+        return if (recall.isBlank()) base else base + "\n\nThings you remember about Babu Jaan:\n" + recall +
+            "\nUse these naturally — do not recite them, and never say \"according to my memory\". " +
+            "A fact you are unsure of, confirm gently instead of asserting it."
+    }
 
     /**
      * Chat — BADSHAH system first: the owner's pooled Groq key via the Worker

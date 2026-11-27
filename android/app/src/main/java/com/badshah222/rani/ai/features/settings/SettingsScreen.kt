@@ -214,8 +214,10 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     // ---- Memory (ConversationMemory — on-device only) ----
     val memoryOn = MutableStateFlow(c.store.memoryOn)
     val memoryAskFirst = MutableStateFlow(c.store.memoryAskFirst)
+    val memorySync = MutableStateFlow(c.store.memorySync)
     fun setMemoryOn(v: Boolean) { c.store.memoryOn = v; memoryOn.value = v }
     fun setMemoryAskFirst(v: Boolean) { c.store.memoryAskFirst = v; memoryAskFirst.value = v }
+    fun setMemorySync(v: Boolean) { c.store.memorySync = v; memorySync.value = v }
 
     // ---- Identity / look (RANI fixed: girlfriend, girl avatar or crown logo) ----
     val avatarChoice = MutableStateFlow(c.store.avatarChoice)
@@ -267,6 +269,7 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
     val orbFloatSize by vm.orbFloatSize.collectAsState(); val orbUiScale by vm.orbUiScale.collectAsState()
     val guardianEnabled by vm.guardianEnabled.collectAsState(); val guardianInterval by vm.guardianInterval.collectAsState()
     val memoryOn by vm.memoryOn.collectAsState(); val memoryAskFirst by vm.memoryAskFirst.collectAsState()
+    val memorySync by vm.memorySync.collectAsState()
     val avatarChoice by vm.avatarChoice.collectAsState(); val emotionId by vm.emotionId.collectAsState()
     val responseStyle by vm.responseStyle.collectAsState(); val imageModel by vm.imageModel.collectAsState()
     val googleSaved by vm.googleSaved.collectAsState(); val googleVoice by vm.googleVoice.collectAsState(); val googleMsg by vm.googleMsg.collectAsState()
@@ -444,10 +447,11 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
 
             // ---- Memory ----
             item { Section("Memory", Icons.Default.Memory) {
-                Text("RANI remembers your conversations — on this phone only. Nothing is ever uploaded.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("RANI remembers your conversations — the on-device store is the source of truth. With sync on, a copy also lives in your own account (owner-only). Nothing else leaves the phone.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Remembering is ON", Modifier.weight(1f)); Switch(memoryOn, vm::setMemoryOn) }
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Ask before saving", Modifier.weight(1f)); Switch(memoryAskFirst, vm::setMemoryAskFirst) }
-                Text("Manage special days and favourites on the Memory screen.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Sync memories to my account", Modifier.weight(1f)); Switch(memorySync, vm::setMemorySync) }
+                Text("Manage special days, favourites and everything RANI remembers on the Memory screen.", style = MaterialTheme.typography.bodySmall, color = Mute)
             } }
 
             // ---- Image Studio (Gemini image + free fallback) ----

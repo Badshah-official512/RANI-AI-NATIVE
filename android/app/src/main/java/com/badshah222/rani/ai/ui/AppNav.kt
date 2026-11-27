@@ -1,20 +1,25 @@
 package com.badshah222.rani.ai.ui
 
 import android.app.Activity
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.badshah222.rani.ai.MainActivity
 import com.badshah222.rani.ai.RaniApp
+import com.badshah222.rani.ai.core.LiveState
 import com.badshah222.rani.ai.features.onboarding.OnboardingScreen
 import com.badshah222.rani.ai.features.about.AboutScreen
 import com.badshah222.rani.ai.features.camera.CameraViewScreen
@@ -125,6 +130,31 @@ private fun SignedInNav(session: SessionViewModel) {
 
     Scaffold(containerColor = Ink) { pad ->
         Box(Modifier.padding(pad)) {
+            // v1.9.0 §21.4 — in-app call bar: while a call is live and the
+            // user is on any screen other than Home, a slim bar sits above
+            // the NavHost (status + latest caption + End). Tapping the bar
+            // returns to Home, where the hero slot shows the same call.
+            val liveActive by LiveState.active.collectAsState()
+            val liveState by LiveState.state.collectAsState()
+            val liveCaption by LiveState.caption.collectAsState()
+            val currentEntry by nav.currentBackStackEntryAsState()
+            val route = currentEntry?.destination?.route
+            Column(Modifier.fillMaxSize()) {
+                if (liveActive && route != "home" && route != "onboarding") {
+                    InAppCallBar(
+                        status = when (liveState) {
+                            "speaking" -> "RANI is speaking"
+                            "listening" -> "RANI is listening"
+                            "thinking" -> "RANI is thinking"
+                            "connecting" -> "Connecting…"
+                            else -> "RANI is on the call"
+                        },
+                        caption = liveCaption,
+                        onTap = { nav.navigate("home") { launchSingleTop = true } },
+                        onEnd = { home.stopLiveSession() },
+                    )
+                }
+                Box(Modifier.weight(1f)) {
             // v1.8.0 §20.3: signed-in + onboarding not done → the onboarding
             // runs first (one question per screen); otherwise Home.
             val appCtx = LocalContext.current.applicationContext
@@ -169,6 +199,47 @@ private fun SignedInNav(session: SessionViewModel) {
                 }
                 composable("recordings") { RecordingsScreen { nav.popBackStack() } }
             }
+                } // Box(weight(1f)) — NavHost
+            } // Column — call bar + NavHost
         }
+    }
+}
+
+/**
+ * v1.9.0 §21.4 — slim in-app call bar above the NavHost. Stonic styling
+ * (dark panel, violet stroke), English only, 44 dp touch targets. The
+ * user's proof, on every screen, that the call is still alive.
+ */
+@Composable
+private fun InAppCallBar(status: String, caption: String, onTap: () -> Unit, onEnd: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable { onTap() }
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(androidx.compose.ui.graphics.Color(0xE6171130))
+            .border(1.5.dp, androidx.compose.ui.graphics.Color(0xFF8B3DFF), RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 0.dp)
+            .height(44.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        androidx.compose.foundation.Canvas(Modifier.size(9.dp)) {
+            drawCircle(color = androidx.compose.ui.graphics.Color(0xFF4ADE80))
+        }
+        Text(status, color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+        if (caption.isNotBlank()) {
+            Text(
+                caption, Modifier.weight(1f), color = Mute,
+                style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
+        Button(
+            onEnd, Modifier.height(36.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color(0xFFD92D20), contentColor = androidx.compose.ui.graphics.Color.White),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+        ) { Text("End") }
     }
 }

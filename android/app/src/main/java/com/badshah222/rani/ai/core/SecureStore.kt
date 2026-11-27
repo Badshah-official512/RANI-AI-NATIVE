@@ -113,6 +113,11 @@ class SecureStore(context: Context) {
     var memoryOn: Boolean get() = prefs.getBoolean("memory_on", true); set(v) = prefs.edit().putBoolean("memory_on", v).apply()
     /** Ask before saving a new memory (MYRA-style consent). */
     var memoryAskFirst: Boolean get() = prefs.getBoolean("memory_ask_first", false); set(v) = prefs.edit().putBoolean("memory_ask_first", v).apply()
+    /** v1.9.0 §21.2 — sync memories to the user's own Supabase rows
+     *  (owner-only RLS). Default ON when signed in; the switch lives in
+     *  Settings → Memory. The on-device store is the source of truth and
+     *  the app works fully with sync off or failing. */
+    var memorySync: Boolean get() = prefs.getBoolean("memory_sync", true); set(v) = prefs.edit().putBoolean("memory_sync", v).apply()
     /** Special days as JSON: [{"name":"Birthday","month":1,"day":1}] — RANI wishes Babu Jaan first. */
     var specialDaysJson: String get() = prefs.getString("special_days", "[]") ?: "[]"; set(v) = prefs.edit().putString("special_days", v).apply()
     /** Relationship memory (favourites) as JSON: {"chai":"doodh pati","song":"..."} — "RANI yaad rakhti hai". */

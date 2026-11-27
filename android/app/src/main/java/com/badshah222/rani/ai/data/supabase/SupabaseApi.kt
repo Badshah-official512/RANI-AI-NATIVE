@@ -159,6 +159,29 @@ class SupabaseApi(private val token: suspend () -> String?) {
             m.contains("p_app") || m.contains("function") && m.contains("does not exist")
     }
 
+    // ---- RANI long-term memory (v1.9.0 §21.2, migration 016) ----
+    /**
+     * Best-effort write to `rani_memories` (owner-only RLS, app='rani').
+     * A missing table (migration not live yet) is logged and skipped —
+     * never thrown, never blocking the call. The on-device store is the
+     * source of truth; sync is a copy, not a dependency.
+     */
+    suspend fun syncMemory(userId: String, kind: String, title: String, content: String, facts: JSONObject?, source: String) {
+        if (userId.isBlank()) return
+        val b = JSONObject().put("user_id", userId).put("app", APP_TAG).put("kind", kind)
+            .put("title", title.take(120)).put("content", content)
+            .put("facts", facts ?: JSONObject()).put("source", source)
+            .put("updated_at", java.time.Instant.now().toString())
+        postRaniTable("rani_memories", b)
+    }
+
+    /** Deletes ALL of the user's rani_memories rows ("Forget everything"). Best-effort. */
+    suspend fun deleteMemories(userId: String) {
+        if (userId.isBlank()) return
+        runCatching { call("DELETE", "rani_memories?user_id=eq.${enc(userId)}") }
+            .onFailure { log("deleteMemories failed: ${it.message}") }
+    }
+
     // ---- identity / analytics (security-definer RPCs, migration 002 + 015) ----
     /** Returns true if the account is blocked. Fail-open (false) when the call cannot run. */
     suspend fun touchProfile(email: String?, name: String?, avatar: String?): Boolean {

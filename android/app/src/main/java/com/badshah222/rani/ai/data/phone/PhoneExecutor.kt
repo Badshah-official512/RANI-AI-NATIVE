@@ -100,12 +100,18 @@ class PhoneExecutor(private val ctx: Context) {
     private fun toE164(raw: String): String? = ContactsHelper.toE164(ctx, raw)
 
     private fun openByName(name: String): PhoneResult {
-        val pm = ctx.packageManager
-        val apps = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
-            .map { it.loadLabel(pm).toString() to it.activityInfo.packageName }
-        val q = name.lowercase()
-        val hit = apps.firstOrNull { it.first.lowercase() == q } ?: apps.firstOrNull { it.first.lowercase().startsWith(q) } ?: apps.firstOrNull { it.first.lowercase().contains(q) }
-        return if (hit != null && launchPackage(hit.second)) PhoneResult.Done("Opening ${hit.first}.") else PhoneResult.Failed("I could not find an app called \"$name\".")
+        // v1.9.0 §21.1 — the chat path resolves through the SAME shared
+        // AppResolver as the Live bridge (exact / normalised / fuzzy /
+        // well-known table / "multiple:…" clarification).
+        return when (val r = com.badshah222.rani.ai.core.AppResolver.resolve(ctx, name)) {
+            is com.badshah222.rani.ai.core.AppResolver.Result.Hit ->
+                if (launchPackage(r.packageName)) PhoneResult.Done("Opening ${r.label}.")
+                else PhoneResult.Failed("I could not open \"${r.label}\".")
+            is com.badshah222.rani.ai.core.AppResolver.Result.Multiple ->
+                PhoneResult.Failed("Do you mean ${r.names.joinToString(" or ")}?")
+            com.badshah222.rani.ai.core.AppResolver.Result.NotFound ->
+                PhoneResult.Failed("I could not find an app called \"$name\".")
+        }
     }
 
     /** MYRA-style system monitor answers, computed on-device — no internet needed. */

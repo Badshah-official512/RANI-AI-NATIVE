@@ -1,0 +1,478 @@
+package com.badshah222.rani.ai.core
+
+import android.content.Context
+import android.util.Log
+import androidx.security.crypto.EncryptedFile
+import androidx.security.crypto.MasterKey
+import com.badshah222.rani.ai.data.supabase.SupabaseApi
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+
+/**
+ * v1.9.0 §21.2 + §21.7 — ONE long-term memory system.
+ *
+ * On-device source of truth: ONE encrypted JSON file
+ * (MasterKey/AES-GCM, same pattern as SecureStore — EncryptedFile,
+ * no new dependency): last 10 full transcripts, last 50 summaries
+ * (<= 500 chars, on-device extractive — no network call), and a facts
+ * map. Secret Chat / Temporary Chat are NEVER captured — the collector
+ * simply never subscribes to those screens.
+ *
+ * Facts use a FIXED category set with high/low confidence; inferred
+ * (low) facts are phrased "you think…" in the recall block and RANI
+ * confirms them gently instead of asserting them. Passwords, keys,
+ * OTPs and banking details are NEVER extracted. Sync to Supabase
+ * `rani_memories` is best-effort, owner-only rows, gated by the
+ * "Sync memories to my account" switch (default ON when signed in).
+ */
+data class MemoryFact(
+    val key: String,
+    val value: String,
+    val confidence: String, // "high" | "low"
+    val source: String, // "said" | "inferred"
+    val updatedAt: Long,
+)
+
+data class Turn(val who: String, val text: String, val atMs: Long = System.currentTimeMillis())
+
+class MemoryStore(
+    context: Context,
+    private val store: SecureStore,
+    private val cloud: SupabaseApi,
+    private val uidProvider: () -> String?,
+) {
+    private val appCtx = context.applicationContext
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val file: File = File(File(appCtx.filesDir, "memory"), "rani_memory.json").apply {
+        parentFile?.mkdirs()
+    }
+    private val lock = Any()
+
+    /** Fixed category set (§21.7) — no free-form sprawl. */
+    val categories = listOf(
+        "name", "nickname", "likes", "dislikes", "favourite_food", "favourite_drink",
+        "favourite_song", "favourite_film", "favourite_show", "birthday", "anniversary",
+        "mood_baseline", "plans", "family", "friends", "routine", "study", "health", "pet_peeves",
+    )
+
+    // ---- in-memory session buffer (current call / chat) ----
+    private val sessionTurns = ArrayList<Turn>()
+    private var sessionSource = ""
+    private var sessionStartedAt = 0L
+
+    // ---- persisted state (cached in memory, written through) ----
+    private var state: JSONObject = loadState()
+
+    private fun encryptedFile(): EncryptedFile {
+        val mk = MasterKey.Builder(appCtx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+        return EncryptedFile.Builder(
+            appCtx, file, mk,
+            EncryptedFile.FileEncryptionScheme.AES256_GCM_HKDF_4KB,
+        ).build()
+    }
+
+    private fun loadState(): JSONObject {
+        return try {
+            if (!file.exists() || file.length() == 0L) return freshState()
+            val bytes = encryptedFile().openFileInput().use { it.readBytes() }
+            JSONObject(String(bytes, Charsets.UTF_8))
+        } catch (e: Exception) {
+            Log.d("RaniMemory", "load failed, starting fresh: ${e.message}")
+            freshState()
+        }
+    }
+
+    private fun freshState(): JSONObject = JSONObject()
+        .put("conversations", JSONArray())
+        .put("summaries", JSONArray())
+        .put("facts", JSONObject())
+        .put("pending_facts", JSONArray())
+        .put("mood_counts", JSONObject())
+        .put("updated_at", System.currentTimeMillis())
+
+    private fun persistLocked() {
+        try {
+            state.put("updated_at", System.currentTimeMillis())
+            encryptedFile().openFileOutput().use { it.write(state.toString().toByteArray(Charsets.UTF_8)) }
+        } catch (e: Exception) {
+            Log.d("RaniMemory", "persist failed: ${e.message}")
+        }
+    }
+
+    fun isOn(): Boolean = store.memoryOn
+
+    // ---- capture ----
+    /** Records one transcript turn. A growing partial transcript (same
+     *  speaker, text only grew) replaces the last turn in place. */
+    fun recordTurn(source: String, who: String, text: String) {
+        if (!isOn() || text.isBlank()) return
+        synchronized(lock) {
+            if (sessionSource != source) {
+                if (sessionTurns.isNotEmpty()) finalizeLocked(sessionSource)
+                sessionSource = source
+                sessionStartedAt = System.currentTimeMillis()
+            }
+            val last = sessionTurns.lastOrNull()
+            if (last != null && last.who == who && text.startsWith(last.text)) {
+                sessionTurns[sessionTurns.lastIndex] = Turn(who, text)
+            } else if (last != null && last.who == who && last.text.startsWith(text)) {
+                // Shorter repeat of the same turn — ignore.
+            } else {
+                sessionTurns.add(Turn(who, text))
+                if (sessionTurns.size > 200) sessionTurns.removeAt(0)
+            }
+        }
+    }
+
+    /** Finalizes the current session: transcript + summary + facts are
+     *  written to the store (background dispatcher — never blocks the call
+     *  UI; a save failure is logged, never shown to the user). */
+    fun finalizeSession(source: String) {
+        if (!isOn()) return
+        scope.launch {
+            synchronized(lock) {
+                if (sessionTurns.isEmpty()) return@synchronized
+                if (sessionSource.isNotEmpty() && sessionSource != source) {
+                    // A different source took over already — finalize what we have.
+                }
+                finalizeLocked(source)
+            }
+        }
+    }
+
+    private fun finalizeLocked(source: String) {
+        if (sessionTurns.isEmpty()) return
+        val turns = sessionTurns.toList()
+        sessionTurns.clear()
+        val startedAt = sessionStartedAt
+        sessionStartedAt = 0L
+        try {
+            val summary = buildSummary(turns)
+            val facts = extractFacts(turns)
+            val askFirst = store.memoryAskFirst
+            // Conversations: last 10 full transcripts.
+            val convs = state.optJSONArray("conversations") ?: JSONArray()
+            val convoObj = JSONObject()
+                .put("started_at", startedAt)
+                .put("source", source)
+                .put("turns", JSONArray().apply {
+                    for (t in turns) put(JSONObject().put("who", t.who).put("text", t.text).put("at", t.atMs))
+                })
+            convs.put(convoObj)
+            while (convs.length() > 10) convs.remove(0)
+            state.put("conversations", convs)
+            // Summaries: last 50.
+            val sums = state.optJSONArray("summaries") ?: JSONArray()
+            sums.put(JSONObject().put("at", System.currentTimeMillis()).put("source", source).put("text", summary))
+            while (sums.length() > 50) sums.remove(0)
+            state.put("summaries", sums)
+            // Facts (or pending when ask-first is on).
+            val factsObj = state.optJSONObject("facts") ?: JSONObject()
+            val pending = state.optJSONArray("pending_facts") ?: JSONArray()
+            for (f in facts) {
+                val entry = JSONObject()
+                    .put("value", f.value).put("confidence", f.confidence)
+                    .put("source", f.source).put("updated_at", f.updatedAt)
+                if (askFirst && f.confidence == "low") {
+                    pending.put(JSONObject().put("key", f.key).put("value", f.value)
+                        .put("confidence", f.confidence).put("source", f.source)
+                        .put("updated_at", f.updatedAt))
+                } else {
+                    factsObj.put(f.key, entry) // newest wins under the same key
+                }
+            }
+            state.put("facts", factsObj)
+            state.put("pending_facts", pending)
+            // Mood baseline: a mood stated in 2+ different sessions becomes a baseline.
+            val mood = moodWord(turns)
+            if (mood != null) {
+                val counts = state.optJSONObject("mood_counts") ?: JSONObject()
+                val n = counts.optInt(mood, 0) + 1
+                counts.put(mood, n)
+                state.put("mood_counts", counts)
+                if (n >= 2 && !factsObj.has("mood_baseline")) {
+                    factsObj.put("mood_baseline", JSONObject().put("value", "often feels $mood")
+                        .put("confidence", "low").put("source", "inferred")
+                        .put("updated_at", System.currentTimeMillis()))
+                    state.put("facts", factsObj)
+                }
+            }
+            persistLocked()
+            // Best-effort Supabase sync (own owner-only rows).
+            syncAsync(source, turns, summary, facts)
+        } catch (e: Exception) {
+            Log.d("RaniMemory", "finalize failed: ${e.message}")
+        }
+    }
+
+    private fun syncAsync(source: String, turns: List<Turn>, summary: String, facts: List<MemoryFact>) {
+        val uid = uidProvider() ?: return
+        if (!store.memorySync) return
+        scope.launch {
+            val title = turns.firstOrNull { it.who == "user" }?.text?.take(60).orEmpty()
+            val transcriptJson = JSONArray().apply {
+                for (t in turns) put(JSONObject().put("who", t.who).put("text", t.text))
+            }.toString()
+            runCatching {
+                cloud.syncMemory(uid, "conversation", title.ifBlank { "Chat with RANI" }, transcriptJson, null, source)
+            }
+            runCatching {
+                cloud.syncMemory(uid, "summary", title.ifBlank { "Summary" }, summary, null, source)
+            }
+            for (f in facts) {
+                runCatching {
+                    val factsJson = JSONObject().put(f.key, f.value)
+                        .put("confidence", f.confidence).put("source", f.source)
+                    cloud.syncMemory(uid, "fact", f.key, f.value, factsJson, source)
+                }
+            }
+        }
+    }
+
+    // ---- recall ----
+    /**
+     * ONE recall block, max 1,200 chars, most recent first: max 15 facts
+     * (newest/highest-confidence first) + last summary + closing line.
+     * Empty when there is nothing to remember — the MEMORY section is then
+     * omitted entirely. Rebuilt per session, never mid-call.
+     */
+    fun buildRecallBlock(): String {
+        if (!isOn()) return ""
+        val facts = facts()
+        if (facts.isEmpty()) {
+            val sums = synchronized(lock) { state.optJSONArray("summaries") ?: JSONArray() }
+            if (sums.length() == 0) return ""
+        }
+        val sb = StringBuilder()
+        sb.append("Things you remember about Babu Jaan:\n")
+        val sorted = facts.sortedWith(compareByDescending<MemoryFact> { it.updatedAt })
+        for (f in sorted.take(15)) {
+            val line = if (f.confidence == "low") {
+                "- ${f.key}: you think it is \"${f.value}\" (not certain — confirm gently)"
+            } else {
+                "- ${f.key}: ${f.value}"
+            }
+            if (sb.length + line.length + 1 > 1200) break
+            sb.append(line).append("\n")
+        }
+        val sums = synchronized(lock) { state.optJSONArray("summaries") ?: JSONArray() }
+        if (sums.length() > 0) {
+            val last = sums.optJSONObject(sums.length() - 1)?.optString("text").orEmpty()
+            if (last.isNotBlank()) {
+                val line = "Last time you talked: $last"
+                if (sb.length + line.length + 1 <= 1200) sb.append(line).append("\n")
+            }
+        }
+        val convs = synchronized(lock) { state.optJSONArray("conversations") ?: JSONArray() }
+        if (convs.length() > 0) {
+            val turns = convs.optJSONObject(convs.length() - 1)?.optJSONArray("turns")
+            val closing = turns?.let { if (it.length() > 0) it.optJSONObject(it.length() - 1)?.optString("text").orEmpty() else "" }.orEmpty()
+            if (closing.isNotBlank()) {
+                val line = "He last said: \"$closing\""
+                if (sb.length + line.length + 1 <= 1200) sb.append(line).append("\n")
+            }
+        }
+        val out = sb.toString().trim()
+        return if (out.length > 1200) out.take(1200) else out
+    }
+
+    fun facts(): List<MemoryFact> {
+        val obj = synchronized(lock) { state.optJSONObject("facts") ?: JSONObject() }
+        val out = ArrayList<MemoryFact>()
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            val o = obj.optJSONObject(k) ?: continue
+            out.add(MemoryFact(k, o.optString("value"), o.optString("confidence", "high"),
+                o.optString("source", "said"), o.optLong("updated_at", 0L)))
+        }
+        return out.sortedByDescending { it.updatedAt }
+    }
+
+    fun pendingFacts(): List<MemoryFact> {
+        val arr = synchronized(lock) { state.optJSONArray("pending_facts") ?: JSONArray() }
+        val out = ArrayList<MemoryFact>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            out.add(MemoryFact(o.optString("key"), o.optString("value"),
+                o.optString("confidence", "low"), o.optString("source", "inferred"),
+                o.optLong("updated_at", 0L)))
+        }
+        return out
+    }
+
+    fun deleteFact(key: String) {
+        synchronized(lock) {
+            val obj = state.optJSONObject("facts") ?: JSONObject()
+            obj.remove(key)
+            state.put("facts", obj)
+            persistLocked()
+        }
+    }
+
+    fun approvePending(key: String) {
+        synchronized(lock) {
+            val pending = state.optJSONArray("pending_facts") ?: JSONArray()
+            val kept = JSONArray()
+            var moved: JSONObject? = null
+            for (i in 0 until pending.length()) {
+                val o = pending.optJSONObject(i) ?: continue
+                if (o.optString("key") == key && moved == null) moved = o else kept.put(o)
+            }
+            state.put("pending_facts", kept)
+            moved?.let {
+                val factsObj = state.optJSONObject("facts") ?: JSONObject()
+                factsObj.put(key, JSONObject().put("value", it.optString("value"))
+                    .put("confidence", it.optString("confidence"))
+                    .put("source", it.optString("source"))
+                    .put("updated_at", System.currentTimeMillis()))
+                state.put("facts", factsObj)
+            }
+            persistLocked()
+        }
+    }
+
+    /** "Forget everything" — wipes on-device AND the user's Supabase rows. */
+    fun forgetEverything() {
+        synchronized(lock) {
+            sessionTurns.clear()
+            state = freshState()
+            runCatching { file.delete() }
+        }
+        val uid = uidProvider()
+        if (uid != null) scope.launch { runCatching { cloud.deleteMemories(uid) } }
+    }
+
+    // ---- summary (on-device, extractive, no network call) ----
+    private fun buildSummary(turns: List<Turn>): String {
+        val factWords = listOf(
+            "like", "love", "favourite", "favorite", "pasand", "birthday", "tomorrow",
+            "going to", "paper", "brother", "sister", "mother", "father", "friend",
+            "always", "every day", "never", "feel", "sad", "tired", "happy", "stressed",
+        )
+        val picked = ArrayList<String>()
+        fun add(t: Turn) {
+            val s = "${if (t.who == "user") "He" else "RANI"}: ${t.text.trim()}"
+            if (s.length > 3 && picked.none { it == s }) picked.add(s)
+        }
+        // Opening exchange (what the call was about).
+        turns.take(2).forEach { add(it) }
+        // Turns containing fact keywords.
+        for (t in turns) {
+            val low = t.text.lowercase()
+            if (factWords.any { low.contains(it) }) add(t)
+        }
+        // Closing exchange.
+        turns.takeLast(2).forEach { add(it) }
+        val joined = picked.joinToString(" ")
+        return if (joined.length > 500) joined.take(497) + "..." else joined
+    }
+
+    private fun moodWord(turns: List<Turn>): String? {
+        val moods = listOf("sad", "tired", "happy", "stressed", "angry", "excited", "lonely", "bored")
+        for (t in turns) {
+            if (t.who != "user") continue
+            val low = t.text.lowercase()
+            for (m in moods) {
+                if (low.contains("i feel $m") || low.contains("i am $m") || low.contains("feeling $m")) return m
+            }
+        }
+        return null
+    }
+
+    // ---- fact extraction (§21.7, pattern-based, on-device) ----
+    private fun extractFacts(turns: List<Turn>): List<MemoryFact> {
+        val out = LinkedHashMap<String, MemoryFact>()
+        val now = System.currentTimeMillis()
+        fun put(key: String, value: String, confidence: String = "high", source: String = "said") {
+            val v = cleanValue(value) ?: return
+            if (isSecret(v)) return
+            out[key] = MemoryFact(key, v, confidence, source, now)
+        }
+        for (t in turns) {
+            if (t.who != "user") continue
+            val raw = t.text.trim()
+            val low = raw.lowercase()
+            // Never extract from a turn that mentions secrets.
+            if (low.contains("password") || low.contains("otp") || low.contains("bank account")
+                || low.contains("card number") || low.contains("api key") || low.contains("secret")
+            ) continue
+            // Name / nickname.
+            Regex("(?i)my name is ([A-Za-z ]{2,30})").find(raw)?.let { put("name", it.groupValues[1]) }
+            Regex("(?i)call me ([A-Za-z ]{2,30})").find(raw)?.let { put("nickname", it.groupValues[1]) }
+            // Favourites.
+            Regex("(?i)my favou?rite food is ([^.,!]{2,60})").find(raw)?.let { put("favourite_food", it.groupValues[1]) }
+            Regex("(?i)my favou?rite drink is ([^.,!]{2,60})").find(raw)?.let { put("favourite_drink", it.groupValues[1]) }
+            Regex("(?i)my favou?rite song is ([^.,!]{2,60})").find(raw)?.let { put("favourite_song", it.groupValues[1]) }
+            Regex("(?i)my favou?rite (?:film|movie) is ([^.,!]{2,60})").find(raw)?.let { put("favourite_film", it.groupValues[1]) }
+            Regex("(?i)my favou?rite show is ([^.,!]{2,60})").find(raw)?.let { put("favourite_show", it.groupValues[1]) }
+            // Likes / dislikes.
+            Regex("(?i)(?:i like|i love|i really like|mujhe .*? pasand hai)\\s+([^.,!]{2,60})").find(raw)?.let {
+                val v = it.groupValues[1].trim()
+                if (v.isNotEmpty() && !v.startsWith("to ")) put("likes", v)
+            }
+            Regex("(?i)(?:i hate|i don't like|i dont like|mujhe .*? nahi pasand)\\s+([^.,!]{2,60})").find(raw)?.let {
+                put("dislikes", it.groupValues[1])
+            }
+            // Birthday / anniversary.
+            Regex("(?i)my birthday is ([^.,!]{2,40})").find(raw)?.let { put("birthday", it.groupValues[1]) }
+            Regex("(?i)my birthday is on ([^.,!]{2,40})").find(raw)?.let { put("birthday", it.groupValues[1]) }
+            // Plans.
+            Regex("(?i)(?:tomorrow i (?:have|am going to|will)|i am going to|my paper is on|i have a paper on)\\s+([^.,!]{2,80})").find(raw)?.let {
+                put("plans", it.groupValues[1])
+            }
+            // Family / friends.
+            Regex("(?i)my (brother|sister|mother|father|amma|abbu|ami|bhai|behen) (?:is |named )?([A-Za-z ]{2,30})").find(raw)?.let {
+                put("family", "${it.groupValues[1]} ${it.groupValues[2]}".trim())
+            }
+            Regex("(?i)my (?:best )?friend (?:is |named )?([A-Za-z ]{2,30})").find(raw)?.let {
+                put("friends", it.groupValues[1])
+            }
+            // Routine / habits.
+            Regex("(?i)(?:i always|every day i|i never)\\s+([^.,!]{2,80})").find(raw)?.let {
+                put("routine", it.groupValues[1])
+            }
+            // Study.
+            Regex("(?i)my (?:favourite|favorite) subject is ([^.,!]{2,40})").find(raw)?.let {
+                put("study", "favourite subject: ${it.groupValues[1]}")
+            }
+            Regex("(?i)i (?:study|am studying) ([^.,!]{2,40})").find(raw)?.let {
+                put("study", it.groupValues[1])
+            }
+            // Health — only what he volunteers.
+            Regex("(?i)i have (?:a |an )?([^.,!]{2,50})").find(raw)?.let {
+                val v = it.groupValues[1]
+                if (v.contains("fever") || v.contains("cold") || v.contains("headache") || v.contains("pain")) {
+                    put("health", v, "low", "inferred")
+                }
+            }
+            // Pet peeves.
+            Regex("(?i)i (?:really )?(?:hate|can't stand|dont like) when ([^.,!]{2,80})").find(raw)?.let {
+                put("pet_peeves", it.groupValues[1])
+            }
+        }
+        return out.values.toList()
+    }
+
+    private fun cleanValue(v: String): String? {
+        var s = v.trim().trimEnd('.', '!', '?', ',', ';', ':').trim()
+        if (s.length < 2 || s.length > 120) return null
+        // Drop leading filler words the regex may have caught.
+        s = s.removePrefix("to ").removePrefix("the ").trim()
+        return s.ifBlank { null }
+    }
+
+    /** Secret shapes are discarded before storage — never a fact. */
+    private fun isSecret(v: String): Boolean {
+        if (Regex("\\d{6,}").containsMatchIn(v)) return true
+        if (Regex("[A-Za-z0-9_\\-]{24,}").containsMatchIn(v)) return true
+        val low = v.lowercase()
+        return low.contains("password") || low.contains("otp") || low.contains("bank")
+            || low.contains("card") || low.contains("api key") || low.contains("secret")
+    }
+}

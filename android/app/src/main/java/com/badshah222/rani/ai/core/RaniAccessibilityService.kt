@@ -199,28 +199,10 @@ class RaniAccessibilityService : AccessibilityService() {
     // on-device only. sendWhatsApp opens the chat with the message drafted —
     // the user presses Send himself (no silent auto-send from the call page).
 
-    /** Open an app by package name, or by display-name match as a fallback. */
-    fun openApp(packageName: String): String {
-        val q = packageName.trim()
-        if (q.isEmpty()) return "fail"
-        return try {
-            val pm = packageManager
-            var intent = runCatching { pm.getLaunchIntentForPackage(q) }.getOrNull()
-            if (intent == null) {
-                // Display-name match among installed apps (e.g. "YouTube").
-                val apps = runCatching { pm.getInstalledApplications(0) }.getOrNull() ?: emptyList()
-                val hit = apps.firstOrNull {
-                    runCatching { pm.getApplicationLabel(it).toString() }.getOrNull()?.equals(q, ignoreCase = true) == true
-                        || it.packageName.contains(q.lowercase().replace(" ", ""), ignoreCase = true)
-                }
-                intent = hit?.let { runCatching { pm.getLaunchIntentForPackage(it.packageName) }.getOrNull() }
-            }
-            if (intent == null) return "notfound"
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-            "ok"
-        } catch (e: Exception) { "fail" }
-    }
+    /** Open an app by package name, or by display-name match as a fallback.
+     *  v1.9.0 §21.1: delegates to the ONE shared AppResolver — the same
+     *  ladder the bridge and the chat path use. */
+    fun openApp(packageName: String): String = AppResolver.launch(this, packageName)
 
     /** Open YouTube with a search, in the YouTube app when installed. */
     fun searchYouTube(query: String): String {

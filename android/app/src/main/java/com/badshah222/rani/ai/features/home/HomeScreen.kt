@@ -9,6 +9,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -46,7 +47,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.badshah222.rani.ai.RaniApp
+import com.badshah222.rani.ai.core.AwarenessCamera
 import com.badshah222.rani.ai.core.AwarenessMonitor
+import com.badshah222.rani.ai.core.CallEngineHolder
 import com.badshah222.rani.ai.core.FloatingOrbService
 import com.badshah222.rani.ai.core.LiveState
 import com.badshah222.rani.ai.core.RaniAccessibilityService
@@ -124,6 +127,12 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- Stonic top-bar controls (Floating + Awareness) ----
     val awarenessOn = MutableStateFlow(c.store.awarenessEnabled)
+    /** v1.9.0 §21.3 — truthful camera state from AwarenessCamera itself:
+     *  "off" | "starting" | "seeing" | "failed". Never a stuck ON. */
+    val awarenessState = AwarenessCamera.visionState
+    val awarenessError = AwarenessCamera.visionError
+    /** Set when the Awareness toggle must ask for the camera permission first. */
+    val needCameraPermission = MutableStateFlow(false)
     val floatingOn = MutableStateFlow(c.store.floatingOrbEnabled)
     /** Set when the overlay permission must be granted before the floating orb can start. */
     val needOverlayPermission = MutableStateFlow(false)
@@ -138,11 +147,60 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private var callStartedAt = 0L
 
     fun setAwareness(v: Boolean) {
-        c.store.awarenessEnabled = v
-        AwarenessMonitor.enabled = v
-        awarenessOn.value = v
-        viewModelScope.launch { runCatching { c.cloud.recordActivity(uid, "awareness", mapOf("enabled" to v)) } }
+        // v1.9.0 §21.3 — ON means the front camera streams and she sees.
+        // The toggle is the preference; the truthful state (OFF / STARTING /
+        // SEEING / FAILED) comes from the camera itself (AwarenessCamera).
+        if (!v) {
+            stopVision()
+            c.store.awarenessEnabled = false
+            AwarenessMonitor.enabled = false
+            awarenessOn.value = false
+            viewModelScope.launch { runCatching { c.cloud.recordActivity(uid, "awareness", mapOf("enabled" to false)) } }
+            return
+        }
+        val ctx = getApplication<Application>()
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            // The toggle first requests the camera (same one-time pattern as
+            // onboarding step 3). Denial leaves the toggle OFF with the
+            // reason shown inline — never a stuck ON.
+            needCameraPermission.value = true
+            return
+        }
+        c.store.awarenessEnabled = true
+        AwarenessMonitor.enabled = true
+        awarenessOn.value = true
+        viewModelScope.launch { runCatching { c.cloud.recordActivity(uid, "awareness", mapOf("enabled" to true)) } }
+        if (LiveState.active.value) startVision()
     }
+
+    /** Result of the one-time camera-permission ask for Awareness. */
+    fun onCameraPermissionResult(granted: Boolean) {
+        needCameraPermission.value = false
+        if (!granted) {
+            c.store.awarenessEnabled = false
+            AwarenessMonitor.enabled = false
+            awarenessOn.value = false
+            return
+        }
+        c.store.awarenessEnabled = true
+        AwarenessMonitor.enabled = true
+        awarenessOn.value = true
+        if (LiveState.active.value) startVision()
+    }
+
+    /** v1.9.0 §21.3 — start the front-camera stream (frames only flow
+     *  while a Live call is live). The toggle stays ON as the preference
+     *  and re-arms on the next call. */
+    private fun startVision() {
+        val activity = CallEngineHolder.activity ?: return
+        AwarenessCamera.start(activity) { b64 ->
+            if (LiveState.active.value && awarenessOn.value) {
+                CallEngineHolder.engine?.sendCameraFrame(b64)
+            }
+        }
+    }
+
+    private fun stopVision() = AwarenessCamera.stop()
 
     fun setFloating(v: Boolean) {
         val ctx = getApplication<Application>()
@@ -284,7 +342,10 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     fun setLiveMuted(m: Boolean) {
         val changed = LiveState.muted.value != m
         LiveState.setMuted(m)
-        runCatching { heroWebView?.evaluateJavascript("window.setRaniMuted && setRaniMuted($m)", null) }
+        // v1.9.0 §21.4: mute goes to the engine-held WebView (the hero no
+        // longer owns one). The old heroWebView path is kept as a fallback.
+        CallEngineHolder.engine?.setMuted(m)
+            ?: runCatching { heroWebView?.evaluateJavascript("window.setRaniMuted && setRaniMuted($m)", null) }
         if (changed) {
             runCatching {
                 getApplication<Application>().sendBroadcast(
@@ -318,9 +379,15 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** v1.8.0 §20.1.4: push a newly detected emotion into the hero page —
-     *  same setRaniEmotion call RaniLiveActivity.pushEmotionToPage makes. */
+    /** v1.9.0 §20.1.4: push a newly detected emotion into the hero page —
+     *  same setRaniEmotion call RaniLiveActivity.pushEmotionToPage makes.
+     *  v1.9.0 §21.4: the engine holds the WebView now. */
     private fun pushEmotionToHeroPage(id: String, label: String, colorHex: String, style: String) {
+        val engine = CallEngineHolder.engine
+        if (engine != null) {
+            engine.pushEmotion(id, label, colorHex, style)
+            return
+        }
         val wv = heroWebView ?: return
         runCatching {
             wv.evaluateJavascript(
@@ -401,20 +468,18 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile var heroWebView: WebView? = null
     /** Selected Gemini Live voice name — always one of the female voices (Aoede default). */
     val liveVoiceName: String get() = c.store.liveVoiceName
-    /** Live call entry — v1.8.0 §20.1: the call runs EMBEDDED in the home
-     *  hero (HeroLiveWebView, the bundled page, gemini-3.8-live only). No
-     *  separate call screen any more — startLiveSession() only resolves
-     *  the key (own first, pooled ≤9 s) and sets heroLiveKey; the hero
-     *  WebView loads the page itself. Single attempt, gemini-3.8-live
-     *  only. If no key exists at all, the §19.1.4 inline card shows
-     *  (autoCallCard "failed" when the auto-call attempted it).
-     *  (No detectLiveModel pre-flight here — the page is the authority and
-     *  shows its own error if the model does not run on the key.) */
+    /** Live call entry — v1.9.0 §21.4: the call runs in the persistent
+     *  CallEngine (MainActivity holder), embedded in the home hero slot.
+     *  startLiveSession() only resolves the key (own first, pooled ≤9 s)
+     *  and starts the engine; the hero slot hosts the engine's WebView.
+     *  Single attempt, gemini-3.8-live only. The MEMORY recall block
+     *  (§21.2) travels as &memory=, the pet name as &pet=. If no key
+     *  exists at all, the §19.1.4 inline card shows. No silent fallback
+     *  to RaniLiveActivity — if the engine is missing, the call fails
+     *  loudly with the "failed" card instead. */
     fun startLiveSession() {
         // N-2: a hero call is ALREADY live — NEVER start a second Live
-        // socket + mic pipeline on top of it. The call IS on Home; there
-        // is no call Activity to bring forward any more (§20.1.4 —
-        // bringLiveCallToFront() is gone).
+        // socket + mic pipeline on top of it.
         if (LiveState.active.value && heroLiveKey.value != null) return
         // N-2 (double-tap): a launch is already in flight (key fetch can
         // take up to 9 s for the pooled key) — a second tap must not start
@@ -429,7 +494,6 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             // Firebase-login gated) is the fallback. F4 (v1.8.0 fix): the
             // fetch runs in this ViewModel coroutine (Main) but is
             // SUSPENDING — never blocking — so the UI never freezes.
-            // The old blocking call here froze Main up to ~9 s (ANR risk).
             val own = c.store.apiKey(Provider.GEMINI)
             val key = own ?: runCatching { withTimeoutOrNull(9_000) { c.worker.liveKey() } }.getOrNull()
             if (key.isNullOrBlank()) {
@@ -443,21 +507,38 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             // second tap in the same second cannot start a second fetch
             // either. Reset on failure.
             LiveState.setState("connecting")
+            val engine = CallEngineHolder.engine
+            val memoryBlock = c.memory.buildRecallBlock()
+            val started = engine?.start(key, c.store.liveVoiceName, memoryBlock, c.store.petName) == true
+            if (!started) {
+                c.store.lastLiveError = "The call engine is not ready. Try again."
+                if (autoCallAttempted) autoCallCard.value = "failed"
+                LiveState.setState("error")
+                liveLaunchAtMs = 0L
+                return@launch
+            }
             heroLiveKey.value = key
+            // v1.9.0 §21.3: Awareness ON re-arms the camera on every call.
+            if (c.store.awarenessEnabled) startVision()
         }
     }
-    /** End the Live call: clear the hero key (the hero WebView is disposed)
-     *  + mark the shared state ended + broadcast ACTION_END_LIVE (harmless
+    /** End the Live call: the engine destroys its WebView (the ONLY place
+     *  a WebView is destroyed — never on navigation), the hero key clears
+     *  and the shared state ends + broadcast ACTION_END_LIVE (harmless
      *  if RaniLiveActivity is not running). Safe when the hero is already
-     *  gone. (The dead HttpLiveSession is NOT stopped here any more — S-7,
-     *  it never ran in v1.6.1.)
+     *  gone. The camera stream stops with the call; the Awareness
+     *  preference stays ON and re-arms on the next call.
      *  F2/F3 loop guard (v1.8.0 fix): this is called BY the ACTION_END_LIVE
-     *  receiver and by HeroLiveWebView.onDispose — rebroadcasting
+     *  receiver and by the engine's onEnded callback — rebroadcasting
      *  unconditionally would re-trigger our own receiver forever. The
      *  broadcast only goes out when a call was actually live (hero key set
      *  or LiveState active). */
     fun stopLiveSession() {
         val wasLive = heroLiveKey.value != null || LiveState.active.value
+        // v1.9.0 §21.4: destroy the engine WebView (idempotent — a second
+        // call is a no-op once the engine has nulled it).
+        CallEngineHolder.engine?.end()
+        stopVision()
         heroLiveKey.value = null
         LiveState.onEnded()
         if (wasLive) {
@@ -503,8 +584,17 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         // N-2: when the Live call ends, the launch gate opens again — the
         // next tap starts a fresh call. (While a call is live,
         // startLiveSession() returns at once — no second socket.)
+        // v1.9.0 §21.2: ending the call FINALIZES the conversation into
+        // long-term memory (transcript + summary + facts). The engine's
+        // onEnded callback routes here too, via CallEngineHolder.
+        CallEngineHolder.onCallEnded = { stopLiveSession() }
         viewModelScope.launch {
-            LiveState.active.collect { active -> if (!active) liveLaunchAtMs = 0L }
+            LiveState.active.collect { active ->
+                if (!active) {
+                    liveLaunchAtMs = 0L
+                    c.memory.finalizeSession("live_call")
+                }
+            }
         }
         // F5 (v1.8.0 fix): a page error bridges 'error' -> LiveState "error"
         // (active=false), so the pill/caption/Mute/End vanish — but the hero
@@ -541,6 +631,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             LiveState.transcript.collect { t ->
                 if (t == null || t.text.isBlank()) return@collect
                 val who = if (t.who == "user") "user" else "assistant"
+                // v1.9.0 §21.2: Live turns feed the SAME memory store as
+                // typed chats (finalized when the call ends).
+                c.memory.recordTurn("live_call", who, t.text)
                 if (who == "user" && c.store.emotionId == null) {
                     applyEmotion(Emotions.detect(t.text))
                 }
@@ -572,6 +665,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         val t = text.trim(); if (t.isEmpty() || busy.value) return
         error.value = null
         add(ChatMessage("user", t))
+        // v1.9.0 §21.2: typed chats feed the SAME memory store as Live calls.
+        c.memory.recordTurn("chat", "user", t)
         val action = CommandParser.parse(t)
         if (action != null) { handleAction(action); return }
         viewModelScope.launch {
@@ -584,7 +679,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 val emo = c.store.emotionId?.let { Emotions.fromId(it) } ?: Emotions.detect(t)
                 applyEmotion(emo)
                 val reply = c.ai.chat(messages.value, emo.style)
-                add(ChatMessage("assistant", reply.text)); status.value = "Speaking..."
+                add(ChatMessage("assistant", reply.text))
+                c.memory.recordTurn("chat", "assistant", reply.text)
+                status.value = "Speaking..."
                 syncToCloud(t, reply)
                 busy.value = false
                 speak(reply.text)
@@ -770,12 +867,17 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             c.cloud.recordActivity(uid, "chat", mapOf("provider" to r.provider.id))
         } // best effort: local history is always kept even when cloud sync is unavailable
     }
-    fun newChat() { convoId = null; messages.value = emptyList(); if (uid.isNotEmpty()) c.chats.clear(uid); c.tts.stop() }
+    fun newChat() {
+        // v1.9.0 §21.2: closing the chat session finalizes it into memory.
+        c.memory.finalizeSession("chat")
+        convoId = null; messages.value = emptyList(); if (uid.isNotEmpty()) c.chats.clear(uid); c.tts.stop()
+    }
     fun stopSpeaking() = c.tts.stop()
     override fun onCleared() {
         // F2: unregister the floating-card Mute/End receivers.
         runCatching { getApplication<Application>().unregisterReceiver(liveMuteReceiver) }
         runCatching { getApplication<Application>().unregisterReceiver(liveEndReceiver) }
+        if (CallEngineHolder.onCallEnded != null) CallEngineHolder.onCallEnded = null
         c.speech.stop()
     }
 }
@@ -870,6 +972,20 @@ fun HomeScreen(
     val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) vm.requestTalk()
     }
+    // v1.9.0 §21.3: the Awareness toggle asks for the camera once; on grant
+    // the front-camera stream starts, on deny the toggle stays OFF.
+    val cameraPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        vm.onCameraPermissionResult(ok)
+    }
+    val needCameraPerm by vm.needCameraPermission.collectAsState()
+    LaunchedEffect(needCameraPerm) {
+        if (needCameraPerm) cameraPerm.launch(Manifest.permission.CAMERA)
+    }
+    val awarenessState by vm.awarenessState.collectAsState()
+    val awarenessError by vm.awarenessError.collectAsState()
+    // v1.9.0 §21.4: Back on Home mid-call minimises to the floating call
+    // card — it does NOT end the call. Only End ends it.
+    BackHandler(enabled = liveActive) { vm.minimizeCall() }
     // v1.7.0 §19.1: the mic ask for the auto-call — requested once; on grant
     // the auto-call retries, on deny the inline hero card stays.
     var micAutoRequested by remember { mutableStateOf(false) }
@@ -973,6 +1089,10 @@ fun HomeScreen(
             maintenance?.let { Banner(it, Bad) }
             announcements.firstOrNull()?.let { Banner("${it.first}: ${it.second}", Blue) }
             if (voiceCheck == "checking") Banner("Verifying your voice…", Blue)
+            // v1.9.0 §21.3: a failed camera shows the reason in plain words,
+            // never a stuck ON.
+            if (awarenessState == "failed") Banner(awarenessError ?: "Camera could not start.", Bad)
+            if (awarenessState == "starting") Banner("Starting camera…", Blue)
 
             Text(vm.greeting, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = VioletSoft, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 
@@ -990,14 +1110,11 @@ fun HomeScreen(
                 )
                 Box(Modifier.fillMaxWidth().height(320.dp)) {
                     RaniCharacter(heroState, level, vm.lowPower, Modifier.fillMaxWidth().height(320.dp).clickable { tapToTalk() }, fullFigure = true, liveState = liveState, glowColor = glowColor, energy = Emotions.energy(emotion))
-                    heroKey?.let { key ->
-                        HeroLiveWebView(
-                            heroKey = key,
-                            voice = vm.liveVoiceName,
-                            onWebView = { vm.heroWebView = it },
-                            onPageEnded = { vm.stopLiveSession() },
-                            modifier = Modifier.fillMaxSize(),
-                        )
+                    // v1.9.0 §21.4: the hero is a SLOT — the engine's
+                    // WebView attaches here while Home is visible and
+                    // detaches (never destroyed) on navigation.
+                    if (heroKey != null) {
+                        HeroLiveSlot(modifier = Modifier.fillMaxSize())
                     }
                 }
             }
@@ -1007,6 +1124,25 @@ fun HomeScreen(
             if (liveActive) {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     LiveStatusPill(liveState)
+                }
+                // v1.9.0 §21.3 — "Seeing" indicator: green pulsing dot +
+                // "Seeing · front camera". Tapping it opens Camera View,
+                // which shows the live feed with her description.
+                if (awarenessState == "seeing") {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Row(
+                            Modifier.clip(RoundedCornerShape(18.dp))
+                                .background(Color(0xFF14532D).copy(alpha = 0.85f))
+                                .border(1.5.dp, Color(0xFF4ADE80), RoundedCornerShape(18.dp))
+                                .clickable { onNav("camera") }
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Box(Modifier.size(9.dp).clip(CircleShape).background(Color(0xFF4ADE80)))
+                            Text("Seeing · front camera", color = Color.White, fontSize = 13.sp)
+                        }
+                    }
                 }
                 Text(
                     when {
