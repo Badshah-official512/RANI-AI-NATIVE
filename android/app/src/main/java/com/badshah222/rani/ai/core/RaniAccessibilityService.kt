@@ -5,10 +5,14 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.badshah222.rani.ai.data.phone.ContactsHelper
+import java.net.URLEncoder
 
 /**
  * v7.2 Accessibility Control (user decision 2026-11-21): user apni marzi se
@@ -187,6 +191,99 @@ class RaniAccessibilityService : AccessibilityService() {
         try { collectTexts(r, out) } catch (e: Exception) { }
         val joined = out.distinct().joinToString(" | ")
         return if (joined.length > 1500) joined.substring(0, 1500) else joined
+    }
+
+    // ---- v1.7.0 (§19.4) — app control, only when the user asks RANI to ----
+    // Every method is fail-soft and returns a status string ("ok" /
+    // "notfound" / "fail"). Nothing is uploaded; contacts are resolved
+    // on-device only. sendWhatsApp opens the chat with the message drafted —
+    // the user presses Send himself (no silent auto-send from the call page).
+
+    /** Open an app by package name, or by display-name match as a fallback. */
+    fun openApp(packageName: String): String {
+        val q = packageName.trim()
+        if (q.isEmpty()) return "fail"
+        return try {
+            val pm = packageManager
+            var intent = runCatching { pm.getLaunchIntentForPackage(q) }.getOrNull()
+            if (intent == null) {
+                // Display-name match among installed apps (e.g. "YouTube").
+                val apps = runCatching { pm.getInstalledApplications(0) }.getOrNull() ?: emptyList()
+                val hit = apps.firstOrNull {
+                    runCatching { pm.getApplicationLabel(it).toString() }.getOrNull()?.equals(q, ignoreCase = true) == true
+                        || it.packageName.contains(q.lowercase().replace(" ", ""), ignoreCase = true)
+                }
+                intent = hit?.let { runCatching { pm.getLaunchIntentForPackage(it.packageName) }.getOrNull() }
+            }
+            if (intent == null) return "notfound"
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            "ok"
+        } catch (e: Exception) { "fail" }
+    }
+
+    /** Open YouTube with a search, in the YouTube app when installed. */
+    fun searchYouTube(query: String): String {
+        val q = query.trim()
+        if (q.isEmpty()) return openApp("com.google.android.youtube")
+        return try {
+            val url = "https://www.youtube.com/results?search_query=" + URLEncoder.encode(q, "UTF-8")
+            val i = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                setPackage("com.google.android.youtube")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { startActivity(i); return "ok" }
+            val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(fallback)
+            "ok"
+        } catch (e: Exception) { "fail" }
+    }
+
+    /** Open Chrome with a Google search (the browser the user asked for). */
+    fun searchChrome(query: String): String {
+        val q = query.trim()
+        return try {
+            val url = if (q.isEmpty()) "https://www.google.com"
+                else "https://www.google.com/search?q=" + URLEncoder.encode(q, "UTF-8")
+            val i = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                setPackage("com.android.chrome")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { startActivity(i); return "ok" }
+            val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(fallback)
+            "ok"
+        } catch (e: Exception) { "fail" }
+    }
+
+    /** Open WhatsApp (main app, then Business as a fallback). */
+    fun openWhatsApp(): String = openApp("com.whatsapp").let {
+        if (it == "ok") "ok" else openApp("com.whatsapp.w4b")
+    }
+
+    /**
+     * Open the WhatsApp chat for a contact name or number with the message
+     * drafted (wa.me link). The user presses Send himself — this never taps
+     * Send on its own. Contacts stay on this phone, never uploaded.
+     */
+    fun sendWhatsApp(contactOrNumber: String, message: String): String {
+        val target = contactOrNumber.trim()
+        if (target.isEmpty()) return "fail"
+        return try {
+            val digitsOnly = target.matches(Regex("^[+]?[0-9][0-9 \\-]{5,}$"))
+            val number = if (digitsOnly) target.replace(" ", "").replace("-", "")
+            else {
+                val entry = runCatching { ContactsHelper.findBest(this, target) }.getOrNull()
+                    ?: return "notfound"
+                runCatching { ContactsHelper.bestNumber(entry) }.getOrNull() ?: return "notfound"
+            }
+            val e164 = runCatching { ContactsHelper.toE164(this, number) }.getOrNull() ?: number
+            var url = "https://wa.me/" + e164.removePrefix("+")
+            if (message.isNotBlank()) url += "?text=" + URLEncoder.encode(message, "UTF-8")
+            val i = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(i)
+            "ok"
+        } catch (e: Exception) { "fail" }
     }
 
     private fun collectTexts(n: AccessibilityNodeInfo?, out: ArrayList<String>) {

@@ -8,7 +8,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.badshah222.rani.ai.domain.LiveModels
 import com.badshah222.rani.ai.domain.LiveVoices
 import com.badshah222.rani.ai.domain.RaniTools
 import com.badshah222.rani.ai.features.settings.SettingsViewModel
@@ -25,12 +24,12 @@ import com.badshah222.rani.ai.ui.theme.*
 fun VoiceModeScreen(home: HomeViewModel, settings: SettingsViewModel, onBack: () -> Unit) {
     val state by home.charState.collectAsState(); val level by home.micLevel.collectAsState()
     val listenMode by settings.listenMode.collectAsState(); val micSensitivity by settings.micSensitivity.collectAsState(); val micGain by settings.micGain.collectAsState()
-    val liveVoiceName by settings.liveVoiceName.collectAsState(); val liveModelKey by settings.liveModelKey.collectAsState()
+    val liveVoiceName by settings.liveVoiceName.collectAsState()
     val liveModel by settings.liveModel.collectAsState(); val liveEnabled by settings.liveEnabled.collectAsState()
     val liveCandidates by settings.liveCandidates.collectAsState(); val liveMsg by settings.liveMsg.collectAsState(); val liveTesting by settings.liveTesting.collectAsState()
     val lowPower by settings.lowPower.collectAsState()
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        TopBar("Voice — RANI ki awaaz", onBack)
+        TopBar("Voice — RANI's voice", onBack)
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
             item {
                 Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
@@ -58,7 +57,7 @@ fun VoiceModeScreen(home: HomeViewModel, settings: SettingsViewModel, onBack: ()
             item {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("RANI ki voices — saari female", style = MaterialTheme.typography.titleMedium, color = Gold)
+                        Text("RANI's voices — all female", style = MaterialTheme.typography.titleMedium, color = Gold)
                         LiveVoices.female.forEach { v ->
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 RadioButton(liveVoiceName == v.name, { settings.setLiveVoice(v) })
@@ -71,16 +70,14 @@ fun VoiceModeScreen(home: HomeViewModel, settings: SettingsViewModel, onBack: ()
             item {
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Live model", style = MaterialTheme.typography.titleMedium, color = Gold)
-                        LiveModels.all.forEach { m ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                RadioButton(liveModelKey == m.key, { settings.setLiveModelKey(m.key) })
-                                Column { Text(m.label, style = MaterialTheme.typography.bodyLarge); Text("${m.modelId} · ${m.version}", style = MaterialTheme.typography.bodySmall, color = Mute) }
-                            }
-                        }
+                        // N-3: no model picker — the boss's order is ONLY
+                        // gemini-3.8-live, one request, no ladder. The call
+                        // hardcodes 3.8-live; the status line below still
+                        // shows what the key offers (detected, 3.8 first).
+                        Text("Live model: Gemini 3.8 Live only", style = MaterialTheme.typography.titleMedium, color = Gold)
                         Text("Session (live)", style = MaterialTheme.typography.titleMedium, color = Gold)
                         Row(verticalAlignment = Alignment.CenterVertically) { Text("Use Live voice on Voice Call", Modifier.weight(1f)); Switch(liveEnabled, settings::setLiveEnabled) }
-                        Text("Live model: ${liveModel ?: "abhi confirm nahi"}", style = MaterialTheme.typography.bodySmall, color = if (liveModel != null) Ok else Mute)
+                        Text("Live model: ${liveModel ?: "not confirmed yet"}", style = MaterialTheme.typography.bodySmall, color = if (liveModel != null) Ok else Mute)
                         Text("Session resumption is ON — if a call drops, RANI resumes from the same point.", style = MaterialTheme.typography.bodySmall, color = Mute)
                         if (liveCandidates.isNotEmpty()) Text("Tried models: ${liveCandidates.split(",").joinToString(", ")}", style = MaterialTheme.typography.bodySmall, color = Mute)
                         Button(settings::testLive, enabled = !liveTesting) { if (liveTesting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("Test Live voice") }

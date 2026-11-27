@@ -177,12 +177,100 @@ object Emotions {
     fun byFamily(f: String) = all.filter { it.family == f }
     fun fromId(id: String?) = all.firstOrNull { it.id == id } ?: all.first()
 
+    /**
+     * v1.7.0 §19.9.1 — "Saray fealing": EVERY emotion shows its OWN colour.
+     * glowColor() returns the emotion's own colour (the 5th field of its
+     * Emotion(...) entry) — NOT the family colour. Two feelings in the same
+     * family must still look different, so the family colour is only the
+     * fallback for an entry that has no colour of its own (none today —
+     * every one of the 138 defines one). The chip (§19.5) already uses the
+     * same own colour, so chip, hero glow and avatar ring can never disagree.
+     * Family reference (§19.8.4): Loving pink, Happy gold, Calm cyan,
+     * Sad deep blue, Angry red, Worried violet — the per-emotion shades
+     * below are the same hues, one distinct shade per feeling.
+     * N-7: the count is 138 — the tree has 138 Emotion(...) entries
+     * (verified by count). The spec §19.5/§19.9.1 said one more; the spec
+     * is corrected to 138 with this change. NO extra emotion is invented
+     * here — that is the boss's call (see report). "100+" is still
+     * exceeded by a wide margin.
+     */
+    fun glowColor(e: Emotion): Color = e.composeColor
+
+    /** Animation energy 0..1 for an emotion (§19.8.4 + §19.9.1): it varies
+     *  PER EMOTION, not just per family — "excited" is faster/brighter than
+     *  "happy", "sleepy" slower than "calm", even though each pair shares a
+     *  family. RaniCharacter turns this into halo pulse, breathing speed
+     *  and shimmer rate, so two feelings never move alike either.
+     *  N-6: same-colour pairs are ALWAYS ≥0.15 apart in energy (most are
+     *  0.20 apart) — the old 0.05 steps were imperceptible (scale +0.001,
+     *  shimmer alpha +0.003). Grouped by energy, highest first; every one
+     *  of the 138 emotions is listed exactly once. The family fallback
+     *  below covers any id missing from this list. */
+    fun energy(e: Emotion): Float = when (e.id) {
+        // Blazing (1.00) — the loudest, brightest feelings
+        "excited", "playful", "energetic", "unstoppable", "electric", "furious", "fuming", "rj" -> 1.0f
+        // Near-blazing (0.95)
+        "celebratory", "delighted", "giggly", "powerful" -> 0.95f
+        // Bright (0.90)
+        "laughing", "joyful", "inspiring", "fierce", "fearless", "driven", "enchanting", "angry", "frustrated", "irritated" -> 0.9f
+        // Sunny (0.85)
+        "cheerful", "sparkling", "sunny", "queen", "singer" -> 0.85f
+        // Happy (0.80)
+        "happy", "funny", "silly", "thrilled", "motivating", "heroic", "victorious", "annoyed", "outraged" -> 0.8f
+        // Warm-bright (0.75)
+        "witty", "passionate", "admiring", "bold", "ambitious", "chef" -> 0.75f
+        // Engaged (0.70)
+        "proud", "romantic", "flirty", "magical", "stern", "sharp", "confident", "determined", "lawyer", "brave" -> 0.7f
+        // Lively (0.65)
+        "welcoming", "supportive", "loving", "curious", "royal", "dervish", "comedian", "teacher" -> 0.65f
+        // Upbeat (0.60)
+        "grateful", "storyteller", "shayar", "host" -> 0.6f
+        // Warm-mid (0.55)
+        "sweet", "adoring", "devoted", "yearning", "serious", "mysterious", "comforting", "warrior", "longing" -> 0.55f
+        // Steady (0.50)
+        "warm", "kind", "polite", "generous", "trustworthy", "beloved", "precious", "thoughtful", "lovely", "charming", "philosopher", "tearful" -> 0.5f
+        // Gentle (0.45)
+        "friendly", "caring", "humble", "sincere", "tender", "dear", "empathetic", "soulful", "reflective", "poet", "anchor", "relaxed" -> 0.45f
+        // Soft (0.40)
+        "gentle", "patient", "calm", "peaceful", "still", "wise", "grounded", "zen", "honest", "affectionate", "cold" -> 0.4f
+        // Quiet (0.35)
+        "composed", "balanced", "tranquil", "nostalgic", "mindful", "prophetic", "fond", "moonlit", "blushing" -> 0.35f
+        // Slow (0.30)
+        "soft", "easygoing", "ancient", "regretful", "blue", "loyal", "close" -> 0.3f
+        // Heavy (0.25)
+        "soothing", "restful", "meditative", "sad", "missing", "heartbroken", "sorry", "homesick", "shy" -> 0.25f
+        // Stillest (0.20)
+        "serene", "sleepy", "dreamy", "lonely", "gloomy" -> 0.2f
+        else -> when (e.family) {
+            "Joy" -> 0.85f
+            "Angry" -> 0.85f
+            "Energy" -> 0.85f
+            "Deep" -> 0.45f
+            "Andaz" -> 0.55f
+            "Love", "Romantic" -> 0.5f
+            "Warm" -> 0.5f
+            "Calm" -> 0.3f
+            "Sad" -> 0.3f
+            else -> 0.5f
+        }
+    }
+
     /** Auto mode: read the user's mood and pick the emotion that answers it like a human would. */
     fun detect(text: String): Emotion {
         val t = text.lowercase()
         fun has(vararg words: String) = words.any { t.contains(it) }
+        // N-12: word-boundary match for "dar"/"darr" (fear) — it must NOT
+        // match "dard" (pain), which belongs to the sick branch below.
+        // The regex takes "dar" or "darr" as a whole word only.
+        fun hasWordDar() = Regex("\\bdarr?\\b").containsMatchIn(t)
         return when {
-            has("sad", "dukhi", "udaas", "pareshan hoon", "rona", "cry", "depress", "akela", "lonely", "miss kar") -> fromId("comforting")
+            // S-3 / §19.8.4: sad words → a SAD-family emotion (glow: deep
+            // blue), NOT "comforting" (Deep → violet). Worried words → a
+            // DEEP-family emotion (glow: violet), NOT "soothing" (Calm →
+            // cyan). "Loving → sad" now changes pink → blue, as the spec says.
+            // N-12: "pareshan" is worry, not sadness — it routes to the
+            // worried branch below, never here.
+            has("sad", "dukhi", "udaas", "rona", "cry", "depress", "akela", "lonely", "miss kar") -> fromId("sad")
             has("miss", "yaad aa", "yaad hai", "missing you") -> fromId("missing")
             has("shadi", "shaadi", "marry me", "dulhan", "shaadi kar") -> fromId("romantic")
             has("bhooka", "hungry", "bhook", "khaana kha") -> fromId("caring")
@@ -190,7 +278,7 @@ object Emotions {
             has("gaana", "song", "music", "geet") -> fromId("playful")
             has("safar", "travel", "ghoomna", "trip") -> fromId("excited")
             has("gussa", "angry", "ghusa", "naraz", "annoyed", "frustrat") -> fromId("calm")
-            has("dar", "worried", "tension", "fikar", "anxious", "stress", "ghabra") -> fromId("soothing")
+            has("worried", "tension", "fikar", "anxious", "stress", "ghabra", "pareshan") || hasWordDar() -> fromId("comforting")
             has("bimar", "sick", "ill", "dard", "pain", "fever", "bukhar", "tabiyat") -> fromId("caring")
             has("shukriya", "thank", "great help", "bohat acha", "zabardast kaam") -> fromId("grateful")
             has("ho gaya", "kar liya", "success", "kamyab", "passed", "jeet", "won", "mil gaya", "promotion") -> fromId("celebratory")

@@ -40,7 +40,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import com.badshah222.rani.ai.data.voice.LiveSession
+import com.badshah222.rani.ai.core.LiveState
+import com.badshah222.rani.ai.domain.Emotions
 import com.badshah222.rani.ai.ui.character.CharState
 import com.badshah222.rani.ai.ui.character.RaniCharacter
 import com.badshah222.rani.ai.ui.orb.VoiceOrb
@@ -51,20 +52,25 @@ import kotlin.random.Random
 /**
  * The full-screen voice call. Primary engine: Gemini Live — a real-time conversation
  * in a natural human voice, with the full-figure character on screen and a small
- * voice-pulse orb as the level indicator. If Live is unavailable for this
- * phone/key, it quietly falls back to the classic listen → think → speak mode
- * and says so once, instead of looping errors. The voice-print gate runs once
- * at the start (requestLive / requestCall) — never on every turn.
+ * voice-pulse orb as the level indicator. The real call runs in RaniLiveActivity
+ * (the bundled page, v1.6.1 engine); this screen mirrors the shared LiveState
+ * fed by the page bridge — it does NOT read the dead HttpLiveSession any more
+ * (S-7). If Live is unavailable for this phone/key, it quietly falls back to
+ * the classic listen → think → speak mode and says so once, instead of looping
+ * errors. The voice-print gate runs once at the start (requestLive / requestCall)
+ * — never on every turn.
  */
 @Composable
 fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val classicState by vm.charState.collectAsState(); val classicLevel by vm.micLevel.collectAsState()
     val partial by vm.partial.collectAsState()
-    val liveState by vm.live.state.collectAsState(); val liveLevel by vm.live.level.collectAsState()
-    val liveUser by vm.live.userText.collectAsState(); val liveAssistant by vm.live.assistantText.collectAsState()
-    val liveError by vm.live.error.collectAsState(); val muted by vm.live.muted.collectAsState()
-    val attemptInfo by vm.live.attemptInfo.collectAsState(); val liveLastError by vm.live.lastError.collectAsState()
+    // S-7: live state comes from the shared LiveState (fed by the RaniBridge
+    // from the bundled Live page) — the dead HttpLiveSession is never read.
+    val liveState by LiveState.state.collectAsState()
+    val liveMuted by LiveState.muted.collectAsState()
+    val liveCaption by LiveState.caption.collectAsState()
+    val liveCaptionWho by LiveState.captionWho.collectAsState()
     val fallback by vm.liveFallback.collectAsState()
     val emotion by vm.emotion.collectAsState()
     val inCall by vm.inCall.collectAsState(); val callMuted by vm.callMuted.collectAsState()
@@ -79,10 +85,16 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
 
     fun begin() {
         if (started) return; started = true
-        // v1.5.0 — HTTP call only (boss's order: no web page). The Live call
-        // runs over plain HTTP streaming (HttpLiveSession → POST /api/live-http)
-        // — NO WebSocket on the phone, no web page at all. The WebView path
-        // is removed.
+        // N-2: a call is already live (e.g. the user tapped the floating
+        // call card / avatar mid-call and landed back on this screen) —
+        // NEVER start a second Live session. Bring the existing call
+        // Activity forward instead; startLiveSession() does the same
+        // check, this one keeps the screen itself from even trying.
+        if (LiveState.active.value && vm.bringLiveCallToFront()) return
+        // The Live call runs in RaniLiveActivity (the bundled page, BADSHAH's
+        // proven WebView engine, v1.6.1) — no web page, no HTTP engine.
+        // startLiveSession() launches that Activity; the classic call is
+        // the fallback when Live cannot run.
         if (liveMode) vm.startLiveSession() else vm.requestCall()
     }
     val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
@@ -110,22 +122,29 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     }
 
     val orbState = if (liveMode) when (liveState) {
-        LiveSession.State.Connecting -> CharState.Thinking
-        LiveSession.State.Listening -> CharState.Listening
-        LiveSession.State.Thinking -> CharState.Thinking
-        LiveSession.State.Speaking -> CharState.Speaking
-        LiveSession.State.Error -> CharState.Error
-        LiveSession.State.Idle -> CharState.Idle
+        "connecting", "thinking" -> CharState.Thinking
+        "listening" -> CharState.Listening
+        "speaking" -> CharState.Speaking
+        "error", "ended" -> CharState.Error
+        else -> CharState.Idle
     } else classicState
-    val orbLevel = if (liveMode) liveLevel else classicLevel
+    // No mic-level stream exists for the WebView call (the page draws its
+    // own equalizer) — the orb pulse is derived from the live state word,
+    // so pill, character and orb can never disagree about speaking vs
+    // listening (§19.9.2).
+    val orbLevel = if (liveMode) when (liveState) {
+        "speaking" -> 0.6f
+        "listening" -> 0.3f
+        else -> 0f
+    } else classicLevel
     val name = vm.assistantName
     val statusText = if (liveMode) when (liveState) {
-        LiveSession.State.Connecting -> "Connecting…"
-        LiveSession.State.Listening -> "$name is listening…"
-        LiveSession.State.Thinking -> "$name is thinking…"
-        LiveSession.State.Speaking -> "$name is speaking…"
-        LiveSession.State.Error -> liveError ?: "Live voice stopped"
-        LiveSession.State.Idle -> "$name is ready"
+        "connecting" -> "Connecting…"
+        "listening" -> "$name is listening…"
+        "thinking" -> "$name is thinking…"
+        "speaking" -> "$name is speaking…"
+        "error", "ended" -> "Live voice stopped"
+        else -> "$name is ready"
     } else when (classicState) {
         CharState.Listening -> "$name is listening…"
         CharState.Thinking -> "$name is thinking…"
@@ -134,10 +153,12 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
         CharState.Error -> "Something went wrong"
         CharState.Idle -> "$name is ready"
     }
+    // Live caption from the shared LiveState (page bridge). S-4: the "Babu
+    // Jaan:" speaker label here is left exactly as it is — the boss has
+    // not decided the §18 strip question yet.
     val transcript = if (liveMode) {
         when {
-            liveAssistant.isNotEmpty() -> liveAssistant
-            liveUser.isNotEmpty() -> "You: $liveUser"
+            liveCaption.isNotBlank() -> (if (liveCaptionWho.isNotBlank()) "$liveCaptionWho: " else "") + liveCaption
             else -> ""
         }
     } else partial
@@ -152,7 +173,7 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Ink, Panel2, Ink))).statusBarsPadding().navigationBarsPadding()) {
         AmbientLights(Modifier.fillMaxSize())
         // Edge glow: the whole screen rim lights up while the assistant is listening.
-        val glowOn = if (liveMode) liveState == com.badshah222.rani.ai.data.voice.LiveSession.State.Listening else classicState == CharState.Listening
+        val glowOn = if (liveMode) liveState == "listening" else classicState == CharState.Listening
         if (glowOn) {
             Box(Modifier.fillMaxSize().border(3.dp, Violet.copy(alpha = 0.45f + 0.3f * kotlin.math.abs(kotlin.math.sin(spin * Math.PI / 180.0)).toFloat()), RoundedCornerShape(28.dp)))
         }
@@ -197,6 +218,12 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
                     Modifier.fillMaxWidth().height(380.dp).offset(y = floatY.dp)
                         .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { burst++ },
                     fullFigure = true,
+                    // N-11: same wiring as the Home hero — the emotion's
+                    // own glow colour + energy drive the halo, bars and
+                    // rings, so the call screen shows one mood too.
+                    liveState = if (liveMode) liveState else null,
+                    glowColor = emotion.composeColor,
+                    energy = Emotions.energy(emotion),
                 )
             }
             Spacer(Modifier.height(6.dp))
@@ -215,12 +242,6 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
                 "RANI AI GF v${com.badshah222.rani.ai.BuildConfig.VERSION_NAME}",
                 Modifier.fillMaxWidth().padding(top = 2.dp), textAlign = TextAlign.Center, color = Mute, style = MaterialTheme.typography.bodySmall,
             )
-            // While connecting, show exactly which model is being tried — and the
-            // real reason the last try failed — so a stuck call never looks silent.
-            if (liveMode && liveState == LiveSession.State.Connecting) {
-                if (attemptInfo.isNotEmpty()) Text(attemptInfo, Modifier.fillMaxWidth().padding(top = 8.dp), textAlign = TextAlign.Center, color = Mute, style = MaterialTheme.typography.bodySmall)
-                liveLastError?.let { Text("Last try: $it", Modifier.fillMaxWidth().padding(top = 4.dp), textAlign = TextAlign.Center, color = Bad, style = MaterialTheme.typography.bodySmall, maxLines = 2) }
-            }
             // The emotion she is speaking in right now — visible on the call.
             Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                 Row(
@@ -254,7 +275,9 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
             Spacer(Modifier.weight(1f))
             Row(Modifier.fillMaxWidth().padding(bottom = 18.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.Top) {
                 if (liveMode) {
-                    ControlButton(if (muted) Icons.Default.Mic else Icons.Default.MicOff, if (muted) "Unmute" else "Mute", Panel2, Color.White) { vm.live.setMuted(!muted) }
+                    // S-7: Mute goes through HomeViewModel → the page
+                    // (window.setRaniMuted), not the dead engine.
+                    ControlButton(if (liveMuted) Icons.Default.Mic else Icons.Default.MicOff, if (liveMuted) "Unmute" else "Mute", Panel2, Color.White) { vm.setLiveMuted(!liveMuted) }
                     ControlButton(Icons.Default.CallEnd, "End", Bad, Color.White, big = true) { vm.stopLiveSession(); onBack() }
                 } else {
                     ControlButton(if (callMuted) Icons.Default.Mic else Icons.Default.MicOff, if (callMuted) "Unmute" else "Mute", Panel2, Color.White) { vm.setCallMuted(!callMuted) }

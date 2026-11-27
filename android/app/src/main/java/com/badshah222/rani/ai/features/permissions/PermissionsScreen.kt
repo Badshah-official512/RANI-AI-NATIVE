@@ -71,7 +71,7 @@ fun PermissionsScreen(onBack: () -> Unit) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("Accessibility — full control", style = MaterialTheme.typography.titleMedium)
-                            Text("Type, send, read the screen, scroll, tap buttons — only on your command. Without it, \"type and send a message\" will not work.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                            Text("RANI can open apps, search YouTube and Chrome, send WhatsApp messages, scroll and tap — only when you ask her to. Everything stays on your phone.", style = MaterialTheme.typography.bodySmall, color = Mute)
                         }
                         if (tick >= 0 && RaniAccessibilityService.isEnabled(ctx)) Text("ON ✓", color = Ok)
                         else Button({ ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("Open") }

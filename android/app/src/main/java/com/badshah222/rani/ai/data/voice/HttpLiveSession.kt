@@ -9,10 +9,8 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
-import android.provider.Settings
 import androidx.core.content.ContextCompat
 import com.badshah222.rani.ai.core.CallService
-import com.badshah222.rani.ai.core.FloatingOrbService
 import com.badshah222.rani.ai.core.SecureStore
 import com.badshah222.rani.ai.data.worker.WorkerApi
 import com.badshah222.rani.ai.domain.Provider
@@ -62,6 +60,16 @@ import kotlin.concurrent.thread
  * it reuses LiveSession.State — same flows, same callbacks) so VoiceScreen
  * works unchanged. LiveSession (Java-WebSocket) stays in the codebase as the
  * Settings-test / fallback engine; it is NOT the call transport anymore.
+ *
+ * N-10 — QUARANTINED (DEAD CODE, v1.6.1+): this whole engine is UNUSED.
+ * The real call is RaniLiveActivity + the bundled page (BADSHAH's WebView
+ * engine); no code anywhere calls httpLive.start() — RaniApp only
+ * instantiates it (container line 45) and nothing reads its state (S-7:
+ * every surface reads the shared LiveState instead). DO NOT revive it and
+ * DO NOT delete the file (the instantiation stays so the container
+ * compiles unchanged). Its floating-service start/stop calls were removed
+ * in this pass so a dead engine can never start/stop the overlay service
+ * underneath the live call.
  */
 class HttpLiveSession(private val context: Context, private val store: SecureStore, private val worker: WorkerApi? = null) {
 
@@ -119,8 +127,9 @@ class HttpLiveSession(private val context: Context, private val store: SecureSto
     private var userBuf = StringBuilder()
     private var assistantBuf = StringBuilder()
     @Volatile private var turnOpen = false
-    /** True when this call started the overlay service (user had the orb off). */
-    private var callStartedOverlay = false
+    // N-10: the callStartedOverlay field and ensureCallOverlay() are GONE —
+    // this dead engine must never start/stop the floating service. The live
+    // call owns the overlay through RaniLiveActivity instead.
 
     val isActive: Boolean get() = running
 
@@ -146,9 +155,9 @@ class HttpLiveSession(private val context: Context, private val store: SecureSto
         // process (and the HTTP stream + mic) alive when the user minimizes
         // the app or switches to another app. Started only from a user tap.
         runCatching { CallService.start(context) }
-        // Floating call window: the overlay service hosts the call card that
-        // stays visible over other apps while the call is active.
-        ensureCallOverlay()
+        // N-10: the floating call window used to start here
+        // (ensureCallOverlay) — removed: this engine is dead, the live call
+        // owns the overlay through RaniLiveActivity.
         // BADSHAH system: the Live key is fetched FRESH at call time from the
         // owner's pool (/api/live-key, Firebase-login gated) — exactly how the
         // WebSocket engine did it. The user's own Gemini key (Settings) is the
@@ -188,14 +197,8 @@ class HttpLiveSession(private val context: Context, private val store: SecureSto
         }
     }
 
-    /** Start the overlay service for the call window when the overlay
-     *  permission is granted. If the user never enabled the floating orb,
-     *  the service is stopped again when the call ends (see stop()). */
-    private fun ensureCallOverlay() {
-        if (!Settings.canDrawOverlays(context)) return
-        callStartedOverlay = !FloatingOrbService.running && !store.floatingOrbEnabled
-        runCatching { FloatingOrbService.start(context) }
-    }
+    // N-10: ensureCallOverlay() REMOVED — this dead engine must never start
+    // the floating service (see the class header).
 
     /** The HTTP stream dropped mid-call (after connecting): reconnect the SAME
      *  model (gemini-3.8-live, boss's order) up to 8 times, then give up with
@@ -540,10 +543,9 @@ class HttpLiveSession(private val context: Context, private val store: SecureSto
         if (_state.value != LiveSession.State.Error) _state.value = LiveSession.State.Idle
         setCommMode(false)
         runCatching { CallService.stop(context) }
-        // If this call started the overlay service (user had the orb off),
-        // stop it again so no unwanted orb is left behind.
-        if (callStartedOverlay && !store.floatingOrbEnabled) runCatching { FloatingOrbService.stop(context) }
-        callStartedOverlay = false
+        // N-10: the overlay-service stop that used to live here is REMOVED —
+        // this dead engine must never stop the floating service underneath
+        // the live call.
     }
 
     private fun fail(message: String) {

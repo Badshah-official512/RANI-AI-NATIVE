@@ -29,8 +29,8 @@ import android.widget.TextView
 import com.badshah222.rani.ai.MainActivity
 import com.badshah222.rani.ai.R
 import com.badshah222.rani.ai.RaniApp
-import com.badshah222.rani.ai.data.voice.HttpLiveSession
-import com.badshah222.rani.ai.data.voice.LiveSession
+import com.badshah222.rani.ai.features.home.RaniLiveActivity
+import androidx.compose.ui.graphics.toArgb
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
@@ -69,23 +69,46 @@ class FloatingOrbService : Service() {
     private var callStatus: TextView? = null
     private var callCaption: TextView? = null
     private var callMuteBtn: Button? = null
-    private var httpLive: HttpLiveSession? = null
+    private var store: SecureStore? = null
     private val visHandler = Handler(Looper.getMainLooper())
     private val visLoop = object : Runnable {
         override fun run() {
-            // v1.5.0: while a call is live, the floating CALL CARD (not the orb)
-            // sits over other apps — status, captions, Mute + End — so the boss
-            // can look at something else and keep talking. The orb hides while
-            // the card is up. When the app itself is in front, both hide (the
-            // full call screen is visible instead).
-            val inCall = httpLive?.isActive == true
-            val fg = MainActivity.appInForeground
+            // v1.7.0 (§19.3.3): state comes from the shared LiveState fed by
+            // the RaniBridge — HttpLiveSession is dead in v1.6.1 and never
+            // becomes active, so the card showed stale state.
+            val inCall = LiveState.active.value
+            // B-1: "in front" means EITHER Activity — MainActivity's flag
+            // alone is wrong while a call is up, because MainActivity stops
+            // the moment RaniLiveActivity resumes (its onStop would say the
+            // app is in the background and the card would cover the call
+            // page itself). The call Activity reports its own foreground
+            // state, so the card/avatar appear only once the user truly
+            // leaves the call screen.
+            val fg = MainActivity.appInForeground || RaniLiveActivity.callInForeground
+            val liveVoiceOn = store?.autoVoiceEnabled ?: true
             callCard?.visibility = if (inCall && !fg) View.VISIBLE else View.GONE
-            orb?.visibility = if (!fg && !inCall) View.VISIBLE else View.GONE
-            glow?.visibility = if (!fg) View.VISIBLE else View.GONE
+            orb?.visibility = if (!fg && !inCall && liveVoiceOn) View.VISIBLE else View.GONE
+            glow?.visibility = if (!fg && liveVoiceOn) View.VISIBLE else View.GONE
+            // §19.8.4: the avatar's glow ring shows the same emotion colour
+            // as the hero, so the avatar's mood matches.
+            (orb as? AgenticOrbView)?.moodColor = LiveState.glowColor.value.toArgb()
             if (inCall) updateCallCard()
             visHandler.postDelayed(this, 600)
         }
+    }
+
+    /** v1.7.0 §19.3: the FULL CHARACTER image as a head/shoulders medallion
+     *  crop (§18 — top-centre of the full figure, never the launcher bitmap,
+     *  never a plain ball). Drawn at 82% inside the circle by AgenticOrbView. */
+    private fun medallionBitmap(): Bitmap? {
+        val src = runCatching { BitmapFactory.decodeResource(resources, R.drawable.rani_character) }.getOrNull()
+            ?: return null
+        return runCatching {
+            val x = (src.width * 0.20f).toInt()
+            val w = (src.width * 0.60f).toInt()
+            val h = (src.height * 0.40f).toInt()
+            Bitmap.createBitmap(src, x, 0, w.coerceAtLeast(1), h.coerceAtLeast(1))
+        }.getOrNull() ?: src
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -93,8 +116,12 @@ class FloatingOrbService : Service() {
     override fun onCreate() {
         super.onCreate()
         wm = getSystemService(WindowManager::class.java)
-        val sizePx = (76 * resources.displayMetrics.density).toInt()
-        val bmp = runCatching { BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher_round) }.getOrNull()
+        store = (application as RaniApp).container.store
+        // v1.7.0 §19.3: size honours the Settings slider orbFloatSize
+        // (default 96, range 56–200) instead of the old hardcoded 76 dp.
+        val orbDp = (store?.orbFloatSize ?: 96).coerceIn(56, 200)
+        val sizePx = (orbDp * resources.displayMetrics.density).toInt()
+        val bmp = medallionBitmap()
         val iv = AgenticOrbView(this, bmp).apply { contentDescription = "RANI AI" }
         val type = if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
@@ -143,7 +170,6 @@ class FloatingOrbService : Service() {
         runCatching { wm?.addView(gv, gParams) }
         // v1.5.0: floating CALL CARD — built once here, only shown by the
         // visLoop while a Live call is active (see buildCallCard).
-        httpLive = (application as RaniApp).container.httpLive
         buildCallCard(bmp, type)
         running = true
         visHandler.post(visLoop)
@@ -240,7 +266,12 @@ class FloatingOrbService : Service() {
                 setColor(0xFF2A2145.toInt())
             }
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { httpLive?.let { it.setMuted(!it.muted.value) } }
+            setOnClickListener {
+                // v1.7.0: Mute goes through LiveState + the page (window.setRaniMuted).
+                val next = !LiveState.muted.value
+                LiveState.setMuted(next)
+                sendBroadcast(Intent(RaniLiveActivity.ACTION_SET_LIVE_MUTED).putExtra(RaniLiveActivity.EXTRA_MUTED, next))
+            }
         }
         val endBtn = Button(this).apply {
             text = "End"
@@ -255,7 +286,10 @@ class FloatingOrbService : Service() {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginStart = (8 * d).toInt()
             }
-            setOnClickListener { httpLive?.stop() }
+            setOnClickListener {
+                LiveState.onEnded()
+                sendBroadcast(Intent(RaniLiveActivity.ACTION_END_LIVE))
+            }
         }
         row2.addView(callMuteBtn); row2.addView(endBtn)
         card.addView(row2)
@@ -292,27 +326,28 @@ class FloatingOrbService : Service() {
         runCatching { wm?.addView(card, params) }
     }
 
-    /** Refresh the call card's status, caption and Mute label from the live session. */
+    /** Refresh the call card's status, caption and Mute label from LiveState (§19.3.3). */
     private fun updateCallCard() {
-        val live = httpLive ?: return
-        callStatus?.text = when (live.state.value) {
-            LiveSession.State.Connecting -> "Connecting…"
-            LiveSession.State.Listening -> "RANI is listening…"
-            LiveSession.State.Thinking -> "RANI is thinking…"
-            LiveSession.State.Speaking -> "RANI is speaking…"
-            LiveSession.State.Error -> "Call ended"
-            LiveSession.State.Idle -> "RANI is ready"
+        callStatus?.text = when (LiveState.state.value) {
+            "connecting" -> "Connecting…"
+            "listening" -> "RANI is listening…"
+            "thinking" -> "RANI is thinking…"
+            "speaking" -> "RANI is speaking…"
+            "error", "ended" -> "Call ended"
+            else -> "RANI is ready"
         }
-        val cap = when {
-            live.assistantText.value.isNotEmpty() -> live.assistantText.value
-            live.userText.value.isNotEmpty() -> "You: ${live.userText.value}"
-            else -> ""
+        val cap = LiveState.caption.value
+        val who = LiveState.captionWho.value
+        val text = when {
+            cap.isEmpty() -> ""
+            who.isEmpty() -> cap
+            else -> "$who: $cap"
         }
         callCaption?.let {
-            it.text = cap
-            it.visibility = if (cap.isEmpty()) View.GONE else View.VISIBLE
+            it.text = text
+            it.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
         }
-        callMuteBtn?.text = if (live.muted.value) "Unmute" else "Mute"
+        callMuteBtn?.text = if (LiveState.muted.value) "Unmute" else "Mute"
     }
 }
 
@@ -322,6 +357,9 @@ class FloatingOrbService : Service() {
  * green LIVE dot — the same visual language as the call screen.
  */
 class AgenticOrbView(ctx: Context, private val bmp: Bitmap?) : View(ctx) {
+    /** v1.7.0 §19.8.4: the ring/halo colour follows the hero's emotion glow
+     *  (set by FloatingOrbService from LiveState.glowColor). */
+    @Volatile var moodColor: Int = Color.rgb(139, 61, 255)
     private val d = ctx.resources.displayMetrics.density
     private val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val ringBase = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -352,15 +390,17 @@ class AgenticOrbView(ctx: Context, private val bmp: Bitmap?) : View(ctx) {
         val pulse = (sin((now % 2400) / 2400.0 * 2 * Math.PI).toFloat() + 1f) / 2f // 0..1 breathing
         val faceR = min(w, h) / 2f - 9f * d
 
-        // breathing halo
-        haloPaint.color = Color.argb((36 + pulse * 46).toInt(), 139, 61, 255)
+        // breathing halo, in the emotion colour (§19.8.4)
+        haloPaint.color = Color.argb((36 + pulse * 46).toInt(), Color.red(moodColor), Color.green(moodColor), Color.blue(moodColor))
         canvas.drawCircle(cx, cy, faceR + 5f * d + pulse * 3.5f * d, haloPaint)
 
-        // face: orb image (circle-cropped) or dark disc
+        // face: character medallion (§18) scaled to 82% inside the circle,
+        // or a dark disc when the bitmap is missing.
         if (bmp != null) {
             clip.reset(); clip.addCircle(cx, cy, faceR, Path.Direction.CW)
             canvas.save(); canvas.clipPath(clip)
-            val scale = maxOf((faceR * 2) / bmp.width, (faceR * 2) / bmp.height)
+            val target = faceR * 2 * 0.82f
+            val scale = target / maxOf(bmp.width, bmp.height).toFloat()
             val dw = bmp.width * scale; val dh = bmp.height * scale
             canvas.drawBitmap(bmp, cx - dw / 2f, cy - dh / 2f, null)
             canvas.restore()
@@ -373,7 +413,7 @@ class AgenticOrbView(ctx: Context, private val bmp: Bitmap?) : View(ctx) {
         rect.set(cx - ringR, cy - ringR, cx + ringR, cy + ringR)
         canvas.drawCircle(cx, cy, ringR, ringBase)
         val rot = ((now - startAt) % 6000) / 6000f * 360f
-        arcPaint.color = Color.rgb(139, 61, 255)
+        arcPaint.color = moodColor
         canvas.drawArc(rect, rot, 105f, false, arcPaint)
         arcPaint.color = Color.rgb(59, 130, 246)
         canvas.drawArc(rect, rot + 140f, 60f, false, arcPaint)

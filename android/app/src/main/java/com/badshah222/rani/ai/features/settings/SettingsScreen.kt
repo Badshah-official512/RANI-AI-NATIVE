@@ -258,7 +258,7 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
     val ctx = LocalContext.current
     val provider by vm.provider.collectAsState(); val models by vm.models.collectAsState(); val selModel by vm.selectedModel.collectAsState()
     val keySaved by vm.keySaved.collectAsState(); val aiMsg by vm.aiMsg.collectAsState(); val testing by vm.testing.collectAsState()
-    val liveVoiceName by vm.liveVoiceName.collectAsState(); val liveModel by vm.liveModel.collectAsState(); val liveModelKey by vm.liveModelKey.collectAsState()
+    val liveVoiceName by vm.liveVoiceName.collectAsState(); val liveModel by vm.liveModel.collectAsState()
     val liveEnabled by vm.liveEnabled.collectAsState(); val geminiSaved by vm.geminiSaved.collectAsState()
     val liveCandidates by vm.liveCandidates.collectAsState(); val lastLiveError by vm.lastLiveError.collectAsState()
     val liveMsg by vm.liveMsg.collectAsState(); val liveTesting by vm.liveTesting.collectAsState()
@@ -356,13 +356,12 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
             item { Section("Voice & model — Live voice", Icons.Default.RecordVoiceOver) {
                 Text("Voice Call runs on Gemini Live — Google's real human-like female voices. All voices are female, default Aoede.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Use Live voice on Voice Call", Modifier.weight(1f)); Switch(liveEnabled, vm::setLiveEnabled) }
-                Text("Live model chuno:", style = MaterialTheme.typography.labelLarge, color = Gold)
-                LiveModels.all.forEach { m ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(liveModelKey == m.key, { vm.setLiveModelKey(m.key) })
-                        Column { Text(m.label, style = MaterialTheme.typography.bodyLarge); Text("${m.modelId} · ${m.version}", style = MaterialTheme.typography.bodySmall, color = Mute) }
-                    }
-                }
+                // N-3: no model picker — the boss's order is ONLY
+                // gemini-3.8-live, one request, no ladder. A picker offering
+                // other models was decorative (the call hardcodes 3.8-live)
+                // and misleading, so it is gone; the Test path below still
+                // detects which Live model the key offers (3.8 first).
+                Text("Live voice runs on Gemini 3.8 Live only — one model, no switching.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Text("RANI's voices — all female:", style = MaterialTheme.typography.labelLarge, color = Gold)
                 LiveVoices.female.forEach { v ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -462,11 +461,12 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
 
             // ---- Emotions (voice tone follows the emotion) ----
             item { Section("Emotions", Icons.Default.Favorite) {
-                Text("On Auto, RANI reads your mood from your words and answers in the same emotion. Or fix one emotion yourself.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("RANI picks her feeling from your words. You can override it here — you never have to.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(emotionId == null, { vm.setEmotion(null) })
-                    Column { Text("Auto — reads your mood", style = MaterialTheme.typography.bodyLarge); Text("Recommended", style = MaterialTheme.typography.bodySmall, color = Mute) }
+                    Column { Text("Auto (recommended)", style = MaterialTheme.typography.bodyLarge); Text("Reads your mood from your words", style = MaterialTheme.typography.bodySmall, color = Mute) }
                 }
+                Text("Your pick (optional)", style = MaterialTheme.typography.labelLarge, color = Gold)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Emotions.families.forEach { fam -> FilterChip(emotionFamily == fam, { emotionFamily = fam }, { Text(fam) }) }
                 }
@@ -506,7 +506,7 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
                 }
                 Msg(googleMsg)
                 if (googleSaved) {
-                    Text("Voice chuno:", style = MaterialTheme.typography.bodySmall, color = Mute)
+                    Text("Choose a voice:", style = MaterialTheme.typography.bodySmall, color = Mute)
                     GoogleVoices.all.forEach { (id, label) -> Row(verticalAlignment = Alignment.CenterVertically) { RadioButton(googleVoice == id, { vm.pickGoogleVoice(id) }); Column { Text(label, style = MaterialTheme.typography.bodyMedium); Text(id, style = MaterialTheme.typography.bodySmall, color = Mute) } } }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { FilterChip(engine == "google", { vm.setEngine("google") }, { Text("Google voice for replies") }); FilterChip(engine == "android", { vm.setEngine("android") }, { Text("Phone voice") }) }
                 }
@@ -515,7 +515,7 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
             item { Section("App settings", Icons.Default.Tune) {
                 OutlinedButton(onPermissions) { Text("Permissions") }
                 OutlinedButton({ session.signOut() }) { Text("Sign out") }
-                Text("RANI AI GF v1.0.0 — BADSHAH222", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("RANI AI GF v${com.badshah222.rani.ai.BuildConfig.VERSION_NAME} — BADSHAH222", style = MaterialTheme.typography.bodySmall, color = Mute)
             } }
         }
     }

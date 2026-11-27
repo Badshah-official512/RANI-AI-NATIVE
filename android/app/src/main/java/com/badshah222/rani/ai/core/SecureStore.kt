@@ -58,6 +58,10 @@ class SecureStore(context: Context) {
     var liveModel: String? get() = prefs.getString("live_model", null); set(v) = prefs.edit().putString("live_model", v).apply()
     /** Use the Gemini Live engine on the Voice screen when a Gemini key exists. */
     var liveEnabled: Boolean get() = prefs.getBoolean("live_enabled", true); set(v) = prefs.edit().putBoolean("live_enabled", v).apply()
+    /** v1.7.0 (§19.2) — auto-connect + talk on app open, and the floating
+     *  avatar may appear. Default ON. Distinct from liveEnabled (the Live
+     *  engine is allowed at all): OFF here only stops auto-connects. */
+    var autoVoiceEnabled: Boolean get() = prefs.getBoolean("auto_voice_enabled", true); set(v) = prefs.edit().putBoolean("auto_voice_enabled", v).apply()
     /** All live-capable models found for the key (comma-separated), best first — the Live engine tries them in order. */
     var liveCandidates: String get() = prefs.getString("live_candidates", "") ?: ""; set(v) = prefs.edit().putString("live_candidates", v).apply()
     /** Which Live setup variant worked last time (0 = full, 1 = no language code, 2 = bare). Tried first next time. */

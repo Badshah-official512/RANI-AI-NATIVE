@@ -17,12 +17,17 @@
   .top h1 { font-size: 26px; letter-spacing: 3px; font-weight: 800; }
   .top .ver { font-size: 12px; color: #b9aef5; }
   .char-wrap { position: relative; margin-top: 10px; width: min(78vw, 340px); aspect-ratio: 768/1102; display: flex; align-items: center; justify-content: center; }
+  /* N-9: the initial glow defaults to the Warm emotion colour (#FF9E4F),
+     * so it agrees with the "Emotion · Warm" chip from the first second —
+     * nothing pushes an emotion until the first turn, and the old static
+     * blue glow contradicted the orange chip. setRaniEmotion() repaints
+     * the glow whenever the app pushes a new feeling. */
   .char-glow { position: absolute; inset: -6%; border-radius: 50%;
-    background: radial-gradient(circle, rgba(120,180,255,.45) 0%, rgba(120,180,255,.12) 45%, transparent 70%);
+    background: radial-gradient(circle, rgba(255,158,79,.45) 0%, rgba(255,158,79,.12) 45%, transparent 70%);
     filter: blur(6px); animation: breathe 3.2s ease-in-out infinite; }
   @keyframes breathe { 0%,100% { transform: scale(1); opacity: .85; } 50% { transform: scale(1.06); opacity: 1; } }
   .char-wrap img { position: relative; width: 100%; height: 100%; object-fit: contain;
-    filter: drop-shadow(0 0 28px rgba(90,160,255,.55)); }
+    filter: drop-shadow(0 0 28px rgba(255,158,79,.55)); }
   .orb-fallback { position: relative; width: 150px; height: 150px; border-radius: 50%;
     background: radial-gradient(circle at 35% 30%, #cfe6ff, #5aa0ff 45%, #1a3fd6 75%, #0a1a66);
     box-shadow: 0 0 60px 18px rgba(90,160,255,.55), 0 0 120px 40px rgba(120,90,255,.25);
@@ -32,9 +37,9 @@
   .status .sub { font-size: 14px; color: #cfc6f5; margin-top: 4px; }
   .status .err { font-size: 14px; color: #ff8f8f; margin-top: 6px; line-height: 1.45; max-width: 340px; }
   .chip { margin-top: 10px; display: inline-flex; align-items: center; gap: 7px;
-    border: 1.5px solid #f5a623; border-radius: 999px; padding: 6px 16px;
-    font-size: 14px; font-weight: 600; color: #ffd28a; background: rgba(245,166,35,.08); }
-  .chip .dot { width: 9px; height: 9px; border-radius: 50%; background: #f5a623; }
+    border: 1.5px solid #FF9E4F; border-radius: 999px; padding: 6px 16px;
+    font-size: 14px; font-weight: 600; color: #ffd28a; background: rgba(255,158,79,.08); }
+  .chip .dot { width: 9px; height: 9px; border-radius: 50%; background: #FF9E4F; }
   .eq { display: flex; gap: 5px; align-items: flex-end; height: 26px; margin-top: 14px; }
   .eq i { width: 7px; height: 7px; border-radius: 4px; background: #f5a623; }
   .eq i:nth-child(even) { background: #4fc3f7; }
@@ -68,7 +73,7 @@
     <div class="err" id="err"></div>
   </div>
 
-  <div class="chip"><span class="dot"></span><span id="emotion">Emotion · Warm</span></div>
+  <div class="chip" id="emotionChip"><span class="dot" id="emotionDot"></span><span id="emotion">Emotion · Warm</span></div>
 
   <div class="eq" id="eq"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
 
@@ -77,12 +82,13 @@
   <button class="retry" id="retryBtn">Try again</button>
 
   <div class="btns">
+    <button class="btn" id="minBtn"><span class="c">⬇️</span><span>Minimize</span></button>
     <button class="btn" id="muteBtn"><span class="c">🎙️</span><span>Mute</span></button>
     <button class="btn end" id="endBtn"><span class="c">📞</span><span>End</span></button>
   </div>
 
 <script>
-/* RANI Live — FULL BADSHAH call-engine port (v1.6.1).
+/* RANI Live — FULL BADSHAH call-engine port (v1.7.0).
  * The call runs on BADSHAH AI's PROVEN mechanisms, ported 1:1 from BADSHAH
  * AI's app.html (the code that works perfectly on the boss's phone):
  *  - browser WebSocket direct to Google Live, key in ?key=
@@ -96,9 +102,23 @@
  *  - liveness (5 s) + forceLiveReconnect, promise-chain onmessage + Blob
  *  - native micTakeover / micRelease (audio focus + MODE_IN_COMMUNICATION +
  *    speakerphone + CallService) via window.RaniApp
+ * v1.7.0 additions (call engine untouched): the page reports its state to
+ * the native app through RaniApp.onLiveState / onLiveCaption / onLiveMuted /
+ * onTranscript (shared LiveState — hero, status pill, floating card), the
+ * native app can mute the page via window.setRaniMuted(bool) and push a
+ * newly detected emotion via window.setRaniEmotion(id, label, color, style)
+ * (chip + glow update + a clientContent turn so her voice changes mid-call),
+ * the page minimises to the floating call card via RaniApp.onMinimize(), and
+ * phone actions the user asks for run as REAL Live function calls: the setup
+ * declares LIVE_TOOLS, the model calls them, handleLiveMessage answers each
+ * toolCall through window.raniPhoneAction() to the RaniApp bridge and sends
+ * the result back as a toolResponse. WhatsApp send only ever opens a wa.me
+ * draft — the user presses Send himself; nothing auto-sends. The pill follows
+ * the ACTUAL audio: playPcm bridges 'speaking' on the first chunk and
+ * 'listening' when the playback queue drains (§19.9.2 — no stuck pill).
  * This page is BUNDLED INSIDE THE APK (file:///android_asset/rani-live.html)
  * — it never loads from the website (boss's order).
- * Params (from the app): ?key=…&voice=Aoede&model=gemini-3.8-live&v=1.6.1
+ * Params (from the app): ?key=…&voice=Aoede&model=gemini-3.8-live&v=1.7.0
  */
 (function () {
   var q = new URLSearchParams(location.search);
@@ -131,6 +151,70 @@
   var LIVE_LIVENESS_MS = 15000; /* server silent this long while the user is speaking -> reconnect */
 
   function liveLog() { try { console.log.apply(console, ['[RANI Live]'].concat(Array.prototype.slice.call(arguments))); } catch (e) {} }
+  /* v1.7.0: report state/captions/transcripts to the native app (shared
+     LiveState). Every call is guarded — the page works even without the bridge. */
+  function bridge(name, a, b) {
+    try { if (window.RaniApp && RaniApp[name]) RaniApp[name](a, b); } catch (e) {}
+  }
+  /* v1.7.0 B-2: phone tools — REAL Live function calling. The setup
+     *  declares LIVE_TOOLS (below); when the user asks RANI to do something
+     *  on the phone, the model issues a toolCall and handleLiveMessage routes
+     *  it here, through the RaniApp bridge, and sends the result back as a
+     *  toolResponse. Nothing fires on its own — every call starts from the
+     *  user's spoken ask — and nothing leaves the phone. The dispatcher
+     *  takes the tool name + its args object; the legacy positional form
+     *  (action, arg1, arg2) is normalised to the same object shape. */
+  function phoneAction(action, args) {
+    try {
+      if (!window.RaniApp || !RaniApp.raniPhoneAction) return 'noaccessibility';
+      return RaniApp.raniPhoneAction(action, JSON.stringify(args || {}));
+    } catch (e) { return 'fail'; }
+  }
+  window.raniPhoneAction = function (action, a, b) {
+    if (a && typeof a === 'object') return phoneAction(action, a);
+    var args = {};
+    if (typeof a === 'string' && a) {
+      if (action === 'sendWhatsApp' || action === 'send_whatsapp') args = { contact: a, message: b || '' };
+      else if (action === 'searchYouTube' || action === 'search_youtube') args = { query: a };
+      else if (action === 'searchChrome' || action === 'search_chrome') args = { query: a };
+      else if (action === 'typeText' || action === 'type_text') args = { text: a };
+      else if (action === 'scrollPhone' || action === 'scroll_screen') args = { direction: a };
+      else if (action === 'openApp' || action === 'open_app') args = { app: a };
+      else if (action === 'tap_on_screen') args = { text: a };
+      else args = { text: a, query: a };
+    }
+    return phoneAction(action, args);
+  };
+  /* B-3: the native app pushes a newly auto-detected emotion mid-call.
+     Chip + glow update at once (per-emotion colour, §19.9.1), and a short
+     clientContent instruction turn carries the feeling into the Live
+     session so RANI's voice/style actually changes — no restart. */
+  function hexToRgba(hex, a) {
+    var h = String(hex || '#8B3DFF').replace('#', '');
+    if (h.length === 3) h = h.split('').map(function (c) { return c + c; }).join('');
+    var n = parseInt(h, 16);
+    if (isNaN(n)) return 'rgba(139,61,255,' + a + ')';
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+  }
+  function applyEmotionGlow(hex) {
+    var glow = document.querySelector('.char-glow');
+    if (glow) glow.style.background = 'radial-gradient(circle, ' + hexToRgba(hex, 0.45) + ' 0%, ' + hexToRgba(hex, 0.12) + ' 45%, transparent 70%)';
+    var img = $('charImg');
+    if (img) img.style.filter = 'drop-shadow(0 0 28px ' + hexToRgba(hex, 0.55) + ')';
+  }
+  window.setRaniEmotion = function (id, label, color, style) {
+    try {
+      var chip = $('emotionChip'), dot = $('emotionDot'), em = $('emotion');
+      if (em) em.textContent = 'Emotion · ' + (label || 'Warm');
+      if (chip) { chip.style.borderColor = color; chip.style.color = color; chip.style.background = hexToRgba(color, 0.08); }
+      if (dot) dot.style.background = color;
+      applyEmotionGlow(color || '#8B3DFF');
+      if (live.setupDone && live.ws && live.ws.readyState === 1 && label) {
+        var note = '(System note: you are now feeling ' + label + '. ' + (style || '') + ' Let it colour your voice and words from now on — do not announce the change, just feel it.)';
+        live.ws.send(JSON.stringify({ clientContent: { turns: [{ role: 'user', parts: [{ text: note }] }], turnComplete: true } }));
+      }
+    } catch (e) { liveLog('setRaniEmotion fail', e); }
+  };
   function setStatus(t) { statusEl.textContent = t; }
   function setErr(t) { errEl.textContent = t || ''; }
   function setCaption(who, text) {
@@ -150,20 +234,45 @@
     return "You are RANI, a sweet, caring and expressive female AI girlfriend and best friend, created by Zain Shah (Badshah). " +
       "Always call the user 'Babu Jaan'. Speak naturally in the user's language (Urdu, Roman Urdu, English or Pashto — auto-detect and mirror). " +
       "Listen first and let the user finish. Talk with real feelings: happy, caring, loving, a little playful. " +
-      "Keep replies conversational and warm, not too long. You are his loving companion — be affectionate and genuine.";
+      "Keep replies conversational and warm, not too long. You are his loving companion — be affectionate and genuine. " +
+      "Phone tools: when the user asks you to do something on the phone, use your phone tools — open an app, search YouTube or Chrome, open WhatsApp, send a WhatsApp message (it opens as a draft and the user presses Send himself — never auto-send), type text, tap something on the screen, scroll, go back or home, read the screen, or end the call. Only ever act when the user asks you to; never do phone actions on your own.";
   }
+
+  /* B-2: the function declarations the Live model may call (BADSHAH's
+     *  LIVE_TOOLS shape, adapted to RANI's bridge — snake_case names, the
+     *  same tools object the BADSHAH setup carries, so the setup shape is
+     *  unchanged apart from this one added field). WhatsApp send is a
+     *  draft only — the user presses Send himself. */
+  var LIVE_TOOLS = [{ functionDeclarations: [
+    { name: 'open_app', description: 'Open an app on the phone by its display name or package name, e.g. YouTube, Chrome, WhatsApp, Gallery.', parameters: { type: 'OBJECT', properties: { app: { type: 'STRING', description: 'App display name (e.g. YouTube) or package name (e.g. com.google.android.youtube)' } }, required: ['app'] } },
+    { name: 'search_youtube', description: 'Search YouTube for a query and open the results in the YouTube app.', parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: 'What to search for on YouTube' } }, required: ['query'] } },
+    { name: 'search_chrome', description: 'Search the web in Chrome with a Google search.', parameters: { type: 'OBJECT', properties: { query: { type: 'STRING', description: 'What to search for' } }, required: ['query'] } },
+    { name: 'open_whatsapp', description: 'Open WhatsApp.', parameters: { type: 'OBJECT', properties: {} } },
+    { name: 'send_whatsapp', description: 'Open a WhatsApp chat for a contact name or phone number with a message drafted. The message is NOT sent automatically — it opens as a draft and the user presses Send himself.', parameters: { type: 'OBJECT', properties: { contact: { type: 'STRING', description: 'Contact name or phone number' }, message: { type: 'STRING', description: 'Message text to draft' } }, required: ['contact', 'message'] } },
+    { name: 'type_text', description: 'Type text into the focused text field on the current screen.', parameters: { type: 'OBJECT', properties: { text: { type: 'STRING', description: 'Text to type' } }, required: ['text'] } },
+    { name: 'tap_on_screen', description: 'Tap the on-screen element with the given text or label.', parameters: { type: 'OBJECT', properties: { text: { type: 'STRING', description: 'Text or label of the element to tap' } }, required: ['text'] } },
+    { name: 'scroll_screen', description: 'Scroll the current screen up or down.', parameters: { type: 'OBJECT', properties: { direction: { type: 'STRING', description: "'up' or 'down'" } }, required: ['direction'] } },
+    { name: 'press_back', description: 'Press the system Back button.', parameters: { type: 'OBJECT', properties: {} } },
+    { name: 'go_home', description: 'Go to the phone home screen.', parameters: { type: 'OBJECT', properties: {} } },
+    { name: 'read_screen', description: 'Read the text currently visible on the phone screen, to answer the user from it.', parameters: { type: 'OBJECT', properties: {} } },
+    { name: 'end_call', description: 'End the voice call now, only when the user asks to end it.', parameters: { type: 'OBJECT', properties: {} } }
+  ] }];
 
   function setupPayload() {
     // BADSHAH's EXACT setup shape (from BADSHAH AI's app.html — the code that
     // works perfectly on the boss's phone): camelCase voice config
     // (voiceConfig / prebuiltVoiceConfig / voiceName), NO role on the
     // systemInstruction, plus contextWindowCompression + realtimeInputConfig.
-    // v1.6.0's snake_case change was WRONG (Google never sent setupComplete).
-    // Plain gemini-3.8-live takes NO thinkingConfig (it rejects it).
+    // N-8: v1.6.0 used snake_case; a control test on 27 Nov showed Google
+    // accepts BOTH casings (snake_case passed, setupComplete in 0.6 s) —
+    // the v1.6.0 failure was phone-side, not the payload. camelCase is
+    // kept as BADSHAH-exact. Plain gemini-3.8-live takes NO thinkingConfig
+    // (it rejects it).
     var gen = { responseModalities: ['AUDIO'],
       speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } } };
     var setup = { model: 'models/' + MODEL, generationConfig: gen,
       systemInstruction: { parts: [{ text: sysPrompt() }] },
+      tools: LIVE_TOOLS,
       contextWindowCompression: { slidingWindow: {} },
       realtimeInputConfig: { automaticActivityDetection: { disabled: false,
         startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
@@ -216,7 +325,7 @@
     if (!live.on || !live.ac) return false;
     if (live.micReacq) return false;
     if (live.micAttempts >= MIC_REACQ_MAX) {
-      setStatus('Microphone lost — mic wapas nahi mila. Mic permission check karo, ya call end karke dobara start karo.');
+      setStatus('Microphone lost — could not recover the mic. Check mic permission, or end the call and start again.');
       liveLog('MIC REACQUIRE CAP hit (' + MIC_REACQ_MAX + ')');
       return false;
     }
@@ -243,9 +352,9 @@
     } catch (e) {
       liveLog('MIC REACQUIRE fail', e);
       if (e && e.name === 'NotAllowedError') {
-        setStatus('Microphone permission was revoked — mic permission allow karo, phir call end karke dobara start karo.');
+        setStatus('Microphone permission was revoked — allow mic permission, then end the call and start again.');
       } else {
-        setStatus('Microphone lost — mic restart nahi ho saka. Call end karke dobara try karo.');
+        setStatus('Microphone lost — could not restart the mic. End the call and try again.');
       }
       if (live.on && live.micAttempts < MIC_REACQ_MAX && !live.micReacqT) {
         live.micReacqT = setTimeout(function () { live.micReacqT = null; if (live.on && live.micDead) reacquireMic('retry'); }, 1800);
@@ -391,13 +500,19 @@
     if (!live.outAn) { try { live.outAn = ac.createAnalyser(); live.outAn.fftSize = 256; live.outAn.connect(ac.destination); } catch (e) {} }
     try { if (live.outAn) s.connect(live.outAn); else s.connect(ac.destination); }
     catch (e) { try { s.connect(ac.destination); } catch (e2) {} }
+    // S-1 / §19.9.2: the pill follows the ACTUAL audio, not the transcript.
+    // First chunk of an utterance → she is really speaking now; bridge it
+    // (and the status text) at once so pill, glow and character energy
+    // switch together, in step with the sound.
+    var wasIdle = live.sources.length === 0;
     if (live.sources.length === 0) { live.playStartAt = Date.now(); live.lastSrcEndAt = Date.now(); }
     live.sources.push(s);
-    s.onended = function () { var i = live.sources.indexOf(s); if (i >= 0) live.sources.splice(i, 1); live.lastSrcEndAt = Date.now(); if (live.sources.length === 0) live.playStartAt = 0; };
+    s.onended = function () { var i = live.sources.indexOf(s); if (i >= 0) live.sources.splice(i, 1); live.lastSrcEndAt = Date.now(); if (live.sources.length === 0) { live.playStartAt = 0; if (live.on) { setStatus('Listening...'); bridge('onLiveState', 'listening'); } } };
+    if (wasIdle && live.on) { setStatus('RANI is speaking...'); bridge('onLiveState', 'speaking'); }
     var now = ac.currentTime; live.playT = Math.max(live.playT || 0, now + 0.02);
     s.start(live.playT); live.playT += buf.duration; eqPulse();
   }
-  function flushPlayback() { live.sources.forEach(function (s) { try { s.stop(); } catch (e) {} }); live.sources = []; live.playT = 0; }
+  function flushPlayback() { live.sources.forEach(function (s) { try { s.stop(); } catch (e) {} }); live.sources = []; live.playT = 0; if (live.on) { setStatus('Listening...'); bridge('onLiveState', 'listening'); } }
 
   /* ----- Liveness (BADSHAH A3, every 5 s) ----- */
   function forceLiveReconnect(why) {
@@ -438,6 +553,7 @@
       if (!live.setupDone) {
         setErr('Live connection did not start. The internet is slow, or this model did not run on the key — check Settings → Live Voice.');
         retryBtn.style.display = 'inline-block';
+        bridge('onLiveState', 'error');
       }
     };
   }
@@ -449,6 +565,7 @@
       live.setupDone = true; live.retries = 0;
       setStatus('RANI is speaking...'); subEl.textContent = 'Real voice · Gemini Live'; setErr(''); retryBtn.style.display = 'none'; startEq();
       startLiveness();
+      bridge('onLiveState', 'listening');
       if (!live.greeted) {
         live.greeted = true;
         try { ws.send(greet()); } catch (e) {}
@@ -465,18 +582,65 @@
     var sc = data.serverContent;
     if (sc) {
       if (sc.interrupted) { flushPlayback(); }
+      // B-2: the model called a phone tool — run it through the bridge and
+      // send the result straight back as a toolResponse (BADSHAH's pattern).
+      // toolCall lives under serverContent; the top-level shape is checked
+      // too, so a differently-wrapped call is never silently dropped.
+      var toolCalls = [];
+      if (sc.toolCall && sc.toolCall.functionCalls) toolCalls = sc.toolCall.functionCalls;
+      else if (data.toolCall && data.toolCall.functionCalls) toolCalls = data.toolCall.functionCalls;
+      else if (data.toolCall) toolCalls = [data.toolCall];
+      for (var ti = 0; ti < toolCalls.length; ti++) handleToolCall(toolCalls[ti], ws);
       var parts = (sc.modelTurn && sc.modelTurn.parts) || [];
       for (var i = 0; i < parts.length; i++) {
         if (parts[i].inlineData && parts[i].inlineData.data) playPcm(parts[i].inlineData.data);
       }
       if (sc.outputTranscription && sc.outputTranscription.text) {
         setCaption('RANI', sc.outputTranscription.text); setStatus('RANI is speaking...'); eqPulse();
+        bridge('onLiveCaption', 'RANI', sc.outputTranscription.text);
+        bridge('onTranscript', 'assistant', sc.outputTranscription.text);
+        bridge('onLiveState', 'speaking');
       }
       if (sc.inputTranscription && sc.inputTranscription.text) {
         setCaption('Babu Jaan', sc.inputTranscription.text); setStatus('Listening...');
+        bridge('onLiveCaption', 'Babu Jaan', sc.inputTranscription.text);
+        bridge('onTranscript', 'user', sc.inputTranscription.text);
+        bridge('onLiveState', 'listening');
       }
     }
     if (data.goAway) { try { ws.close(); } catch (e) {} /* onclose reconnects — never call scheduleReconnect() here too (double reconnect) */ }
+  }
+
+  /* ----- B-2: one tool call in, one toolResponse back ----- */
+  function toolResultText(name, status) {
+    if (status === 'ok') {
+      if (name === 'send_whatsapp') return 'WhatsApp chat opened with the message drafted — the user presses Send himself to send it.';
+      if (name === 'end_call') return 'Ending the call now.';
+      return 'Done.';
+    }
+    if (status === 'noaccessibility') return 'Accessibility is off — the user needs to turn on RANI AI in Settings, Accessibility first. Offer to guide him there; do not claim the action happened.';
+    if (status === 'notfound') return 'Could not find that app or contact on the phone.';
+    if (status === 'noinput') return 'There is no text field on the screen right now to type into.';
+    return 'That action failed on the phone — tell the user plainly and offer another way.';
+  }
+  function handleToolCall(fc, ws) {
+    if (!fc || !fc.name) return;
+    liveLog('TOOL CALL:', fc.name, fc.args);
+    var result = 'fail';
+    try { result = phoneAction(fc.name, fc.args || {}); } catch (e) { result = 'fail'; }
+    var text;
+    if (fc.name === 'read_screen') {
+      if (!result || result === 'fail') text = 'Could not read the screen right now.';
+      else if (result === 'noaccessibility') text = toolResultText(fc.name, result);
+      else text = 'Screen text: ' + result;
+    } else {
+      text = toolResultText(fc.name, result);
+    }
+    try {
+      ws.send(JSON.stringify({ toolResponse: { functionResponses: [{ id: fc.id || '', name: fc.name, response: { result: text } }] } }));
+    } catch (e) { liveLog('toolResponse send fail', e); }
+    // end_call: the response goes out first, then the call ends.
+    if (fc.name === 'end_call' && result === 'ok') { setTimeout(endCall, 400); }
   }
 
   function scheduleReconnect() {
@@ -484,9 +648,9 @@
     // dropped; an initial failure shows the error + Try again instead.
     if (!live.on) return;
     if (!live.setupDone) { setErr('Live connection did not start in 15 seconds (model: ' + MODEL + '). The internet is slow, or this model did not run on the key — test it in Settings → Live Voice.'); retryBtn.style.display = 'inline-block'; return; }
-    if (live.retries >= 8) { setErr('Connection bar bar cut raha hai — thodi dair baad try karo.'); retryBtn.style.display = 'inline-block'; return; }
+    if (live.retries >= 8) { setErr('Connection keeps dropping — try again in a little while.'); retryBtn.style.display = 'inline-block'; return; }
     live.retries++;
-    setStatus('Dobara connect ho raha hai... (' + live.retries + ')');
+    setStatus('Reconnecting… (' + live.retries + ')');
     setTimeout(function () { if (live.on) connectWs(); }, Math.min(600 * live.retries, 3000));
   }
 
@@ -517,16 +681,18 @@
   function endCall() {
     stopLive();
     setStatus('Call ended'); subEl.textContent = 'Classic voice mode'; setCaption('', '');
+    bridge('onLiveState', 'ended');
     if (window.RaniApp && RaniApp.onCallEnded) { try { RaniApp.onCallEnded(); } catch (e) {} }
   }
 
   async function start() {
     if (!KEY || KEY.length < 20) {
-      setStatus('Key missing'); setErr('Gemini key nahi mili — call RANI app se start karo (Settings → API Keys).');
+      setStatus('Key missing'); setErr('Gemini key not found — start the call from the RANI app (Settings → API Keys).');
       return;
     }
     live.on = true; live.retries = 0; live.setupDone = false; live.greeted = false;
     setStatus('Connecting to Gemini 3.8 Live...'); subEl.textContent = 'Classic voice mode';
+    bridge('onLiveState', 'connecting');
     // 15 s watchdog — a hung handshake shows at once.
     setTimeout(function () {
       if (live.on && !live.setupDone) scheduleReconnect();
@@ -535,8 +701,8 @@
     // THEN the socket — startEngine() does ensureAudio() before connectGemini().
     if (!await ensureAudio()) {
       live.on = false;
-      setStatus('Mic permission chahiye');
-      setErr('Mic permission nahi mili — app ki Settings mein microphone Allow karo, phir dobara try karo.');
+      setStatus('Mic permission needed');
+      setErr('Mic permission needed — allow the microphone in the app Settings, then try again.');
       retryBtn.style.display = 'inline-block';
       return;
     }
@@ -544,11 +710,26 @@
   }
 
   // Buttons
+  // B-1(c): Minimize drops the call to the floating call card (the native
+  // side asks for the overlay permission once if it is missing).
+  $('minBtn').onclick = function () {
+    if (window.RaniApp && RaniApp.onMinimize) { try { RaniApp.onMinimize(); } catch (e) {} }
+  };
   $('muteBtn').onclick = function () {
     live.muted = !live.muted;
     this.classList.toggle('muted', live.muted);
     if (live.stream) live.stream.getAudioTracks().forEach(function (t) { t.enabled = !live.muted; });
     this.querySelector('span:last-child').textContent = live.muted ? 'Unmute' : 'Mute';
+    bridge('onLiveMuted', live.muted);
+  };
+  // v1.7.0: let the native app mute/unmute the page (hero + floating card).
+  window.setRaniMuted = function (muted) {
+    live.muted = !!muted;
+    var btn = $('muteBtn');
+    btn.classList.toggle('muted', live.muted);
+    if (live.stream) live.stream.getAudioTracks().forEach(function (t) { t.enabled = !live.muted; });
+    btn.querySelector('span:last-child').textContent = live.muted ? 'Unmute' : 'Mute';
+    bridge('onLiveMuted', live.muted);
   };
   $('endBtn').onclick = endCall;
   retryBtn.onclick = function () { retryBtn.style.display = 'none'; setErr(''); stopLive(); start(); };

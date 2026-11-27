@@ -132,7 +132,7 @@ fun CoderScreen(vm: CoderViewModel, onBack: () -> Unit) {
         }
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             IconButton({ picker.launch("*/*") }) { Icon(Icons.Default.AttachFile, "@file") }
-            OutlinedTextField(input, { input = it }, Modifier.weight(1f), placeholder = { Text("Kya code chahiye?") }, singleLine = true, shape = RoundedCornerShape(28.dp))
+            OutlinedTextField(input, { input = it }, Modifier.weight(1f), placeholder = { Text("What code do you need?") }, singleLine = true, shape = RoundedCornerShape(28.dp))
             Button({ vm.send(input); input = "" }, enabled = !busy) { Text("Send") }
         }
     }

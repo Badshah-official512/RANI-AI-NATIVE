@@ -28,7 +28,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -38,6 +43,7 @@ import com.badshah222.rani.ai.BuildConfig
 import com.badshah222.rani.ai.RaniApp
 import com.badshah222.rani.ai.core.AwarenessMonitor
 import com.badshah222.rani.ai.core.FloatingOrbService
+import com.badshah222.rani.ai.core.LiveState
 import com.badshah222.rani.ai.core.RaniAccessibilityService
 import com.badshah222.rani.ai.data.phone.MessageSender
 import com.badshah222.rani.ai.data.phone.PhoneResult
@@ -145,7 +151,10 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 needOverlayPermission.value = true
             }
         } else {
-            FloatingOrbService.stop(ctx)
+            // S-6 (same rule as setLiveVoice): never kill the floating call
+            // card mid-call — the service is left running while a call is
+            // active and stops when the call ends.
+            if (!LiveState.active.value) FloatingOrbService.stop(ctx)
             c.store.floatingOrbEnabled = false
             floatingOn.value = false
         }
@@ -162,14 +171,23 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Minimize during a live call: if the overlay permission is missing, ask
-     *  for it once (one tap in Settings) so the floating call window can
-     *  appear over other apps; otherwise the minimized call would be
-     *  invisible and the boss could only return via the notification. */
+    /** Minimize during a live call: with the overlay permission the floating
+     *  service starts at once so the call card appears over other apps;
+     *  without it, ask for it once (one tap in Settings) so the floating
+     *  call window can appear — otherwise the minimized call would be
+     *  invisible and the boss could only return via the notification.
+     *  B-1: the live call is LiveState (the WebView page), NOT the dead
+     *  HttpLiveSession — this is also called from VoiceScreen and, via the
+     *  page's Minimize button, from RaniLiveActivity itself. */
     fun minimizeCall() {
-        if (live.isActive && !Settings.canDrawOverlays(getApplication<Application>()) && !callOverlayAsked) {
-            callOverlayAsked = true
-            needCallOverlayPermission.value = true
+        if (LiveState.active.value) {
+            val ctx = getApplication<Application>()
+            if (Settings.canDrawOverlays(ctx)) {
+                FloatingOrbService.start(ctx)
+            } else if (!callOverlayAsked) {
+                callOverlayAsked = true
+                needCallOverlayPermission.value = true
+            }
         }
     }
 
@@ -180,14 +198,96 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         if (Settings.canDrawOverlays(ctx)) {
             FloatingOrbService.start(ctx)
             // NOTE: floatingOrbEnabled is NOT set here — the service runs only
-            // for this call; HttpLiveSession.stop() stops it again when the
-            // call ends (callStartedOverlay), so no unwanted orb is left behind.
+            // for this call; RaniLiveActivity stops it again when the call
+            // ends and neither Live Voice nor the Floating orb wants it.
         }
     }
 
     // ---- Controls screen toggles (every switch, one by one) ----
     val liveOn = MutableStateFlow(c.store.liveEnabled)
     fun setLive(v: Boolean) { c.store.liveEnabled = v; liveOn.value = v }
+
+    // ---- v1.7.0 §19.2 "Live Voice" — auto-connect on app open (§19.1) ----
+    val liveVoiceOn = MutableStateFlow(c.store.autoVoiceEnabled)
+    fun setLiveVoice(v: Boolean) {
+        c.store.autoVoiceEnabled = v
+        liveVoiceOn.value = v
+        val ctx = getApplication<Application>()
+        if (!v) {
+            // OFF hides the floating avatar immediately (the service gates
+            // the orb on Live Voice). A live call is NOT killed — it only
+            // stops future auto-connects. S-6: the service is left running
+            // while a call is active so the floating call card survives;
+            // RaniLiveActivity stops it when the call ends if nothing
+            // wants it. When no call is active, stop it at once.
+            if (!LiveState.active.value) FloatingOrbService.stop(ctx)
+        } else if (Settings.canDrawOverlays(ctx)) {
+            // ON (re)starts the service for the avatar/call card — the
+            // Floating toggle is not a condition (B-1b).
+            FloatingOrbService.start(ctx)
+        }
+    }
+
+    // ---- v1.7.0 §19.1 auto-call on app open (once per cold start) ----
+    /** Inline hero card when the auto-call cannot start: "liveoff" (Live
+     *  engine off) | "nokey" (no key + signed out) | "mic" | "failed". */
+    val autoCallCard = MutableStateFlow<String?>(null)
+    /** In-memory guard: one auto-call attempt per cold start. Returning from
+     *  the call via Back/End does NOT relaunch; rotation/recomposition does
+     *  not relaunch. */
+    private var autoCallAttempted = false
+    fun maybeAutoCall(micGranted: Boolean) {
+        if (autoCallAttempted) return
+        if (!c.store.autoVoiceEnabled) { autoCallAttempted = true; return }
+        // S-2: liveAvailable() is false for TWO different reasons — say
+        // which one. Live engine OFF → the "liveoff" card (correct copy);
+        // the "nokey" card is only for a genuinely missing key.
+        if (!c.store.liveEnabled) { autoCallAttempted = true; autoCallCard.value = "liveoff"; return }
+        if (!liveAvailable()) { autoCallAttempted = true; autoCallCard.value = "nokey"; return }
+        if (!micGranted) { autoCallCard.value = "mic"; return } // Home asks once; retry on grant
+        autoCallAttempted = true
+        autoCallCard.value = null
+        viewModelScope.launch {
+            if (!voiceGateOk()) return@launch // status bar shows "Voice not recognised.", no card
+            startLiveSession()
+        }
+    }
+    /** One manual retry after a failed auto-call (§19.1.4, same model only). */
+    fun retryAutoCall(micGranted: Boolean) { autoCallAttempted = false; autoCallCard.value = null; maybeAutoCall(micGranted) }
+    fun dismissAutoCallCard() { autoCallCard.value = null }
+
+    /** v1.7.0: mute/unmute the Live page mic from the hero or the floating
+     *  call card — forwarded to RaniLiveActivity, which calls
+     *  window.setRaniMuted(bool) on the page. */
+    fun setLiveMuted(m: Boolean) {
+        LiveState.setMuted(m)
+        runCatching {
+            getApplication<Application>().sendBroadcast(
+                Intent(RaniLiveActivity.ACTION_SET_LIVE_MUTED).putExtra(RaniLiveActivity.EXTRA_MUTED, m)
+            )
+        }
+    }
+
+    /** One place where the hero emotion changes — also pushes the §19.8.4
+     *  glow colour to LiveState so the floating avatar ring matches, and
+     *  (B-3) into the Live page while a call is live, so RANI's voice/style
+     *  actually changes mid-call with no restart and no tap. */
+    private fun applyEmotion(e: Emotion) {
+        emotion.value = e
+        LiveState.setGlowColor(Emotions.glowColor(e))
+        if (LiveState.active.value) {
+            val colorHex = "#%06X".format(0xFFFFFF and e.color.toInt())
+            runCatching {
+                getApplication<Application>().sendBroadcast(
+                    Intent(RaniLiveActivity.ACTION_SET_LIVE_EMOTION)
+                        .putExtra(RaniLiveActivity.EXTRA_EMOTION_ID, e.id)
+                        .putExtra(RaniLiveActivity.EXTRA_EMOTION_LABEL, e.label)
+                        .putExtra(RaniLiveActivity.EXTRA_EMOTION_COLOR, colorHex)
+                        .putExtra(RaniLiveActivity.EXTRA_EMOTION_STYLE, e.style)
+                )
+            }
+        }
+    }
     val screenRecordingOn = MutableStateFlow(c.store.screenRecordingEnabled)
     fun setScreenRecording(v: Boolean) { c.store.screenRecordingEnabled = v; screenRecordingOn.value = v }
     val voicePrintGateOn = MutableStateFlow(c.store.voicePrintGate)
@@ -226,9 +326,21 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { if (voiceGateOk()) { beginCall(); startListening() } }
     }
 
-    // ---- Gemini Live (real human voice) — HTTP streaming, no web page (v1.5.0) ----
-    val live = c.httpLive
+    // ---- Gemini Live (real human voice) — the WebView call engine (v1.6.1) ----
+    // S-7: no surface reads HttpLiveSession any more — that engine is dead
+    // in v1.6.1 (its state never becomes active). The real call lives in
+    // RaniLiveActivity + the bundled page, and its state lives in the
+    // shared LiveState singleton (see the init block below).
     val liveFallback = MutableStateFlow<String?>(null)
+    /** N-2: when a startLiveSession() launch began (ms, 0 = none). A second
+     *  tap while a launch is in flight (key fetch can take up to 9 s) must
+     *  not start a second fetch + Activity. The gate is TIME-BOUNDED
+     *  (12 s, checked in startLiveSession): if the Activity died
+     *  mid-launch, LiveState can stay stale-active, so an unbounded flag
+     *  could swallow taps forever — after 12 s the gate is stale and the
+     *  tap proceeds as a fresh start. Cleared when the call ends (the
+     *  LiveState.active collector in init) or when the launch fails. */
+    private var liveLaunchAtMs = 0L
     /** Live is available when enabled AND there is any key source: the user's own
      *  Gemini key, OR a Firebase sign-in (the pooled key via /api/live-key —
      *  BADSHAH's way: a BADSHAH AI account signs into RANI and needs no own key).
@@ -245,7 +357,39 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
      *  fires and the call screen falls back to classic mode.
      *  (No detectLiveModel pre-flight here — the page is the authority and
      *  shows its own error if the model does not run on the key.) */
+    /** N-2: bring the EXISTING Live call Activity forward instead of
+     *  starting a second one. Returns true when a live call Activity was
+     *  brought to the front; false when there is no live call to return
+     *  to (then the caller starts a fresh call). FLAG_ACTIVITY_REORDER_TO_FRONT
+     *  reuses the running instance — no onCreate, no second socket, no
+     *  second mic pipeline, no second greeting. The Activity's launchMode
+     *  stays standard on purpose: the Back/End flow (endCall + finish)
+     *  is untouched. */
+    fun bringLiveCallToFront(): Boolean {
+        if (!LiveState.active.value || !RaniLiveActivity.isAlive) return false
+        val intent = Intent(getApplication<Application>(), RaniLiveActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+        }
+        getApplication<Application>().startActivity(intent)
+        return true
+    }
     fun startLiveSession() {
+        // N-2: a call is ALREADY live (e.g. the user tapped the floating
+        // call card / avatar mid-call, which routes through VoiceScreen
+        // begin() → here) — NEVER start a second RaniLiveActivity with a
+        // second Live socket + mic pipeline on top of it. Bring the
+        // existing call forward instead. If the Activity is gone
+        // (isAlive false) the LiveState is stale and a fresh call starts
+        // below, as before.
+        if (bringLiveCallToFront()) return
+        // N-2 (double-tap): a launch is already in flight (key fetch can
+        // take up to 9 s for the pooled key) — a second tap must not start
+        // a second fetch + Activity. Time-bounded: a launch older than
+        // 12 s is stale (its Activity died mid-launch) and the tap
+        // proceeds as a fresh start instead of being swallowed.
+        val nowMs = System.currentTimeMillis()
+        if (liveLaunchAtMs != 0L && nowMs - liveLaunchAtMs < 12_000) return
+        liveLaunchAtMs = nowMs
         liveFallback.value = null
         viewModelScope.launch {
             // v1.5.2 key order kept: the user's OWN Gemini key first (proven
@@ -260,8 +404,14 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 val reason = "Add your Google Gemini API key in Settings to use the real voice (or sign in so the pooled key can be used)."
                 liveFallback.value = reason
                 c.store.lastLiveError = reason
+                if (autoCallAttempted) autoCallCard.value = "failed"
+                liveLaunchAtMs = 0L
                 return@launch
             }
+            // N-2: mark the call starting BEFORE launching, so a second
+            // tap in the same second (double-tap on Voice Call / orb)
+            // cannot launch a second Activity either. Reset on failure.
+            LiveState.setState("connecting")
             val intent = Intent(getApplication<Application>(), RaniLiveActivity::class.java).apply {
                 putExtra(RaniLiveActivity.EXTRA_KEY, key)
                 putExtra(RaniLiveActivity.EXTRA_VOICE, c.store.liveVoiceName)
@@ -269,14 +419,16 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 putExtra(RaniLiveActivity.EXTRA_VER, BuildConfig.VERSION_NAME)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            getApplication<Application>().startActivity(intent)
+            runCatching { getApplication<Application>().startActivity(intent) }
+                .onFailure { liveLaunchAtMs = 0L; LiveState.onEnded() }
         }
     }
-    /** End the Live call: stop the (unused) HTTP engine and tell the call
+    /** End the Live call: mark the shared state ended and tell the call
      *  Activity to finish. Safe when the Activity is already gone — the
-     *  broadcast simply has no receiver then. */
+     *  broadcast simply has no receiver then. (The dead HttpLiveSession
+     *  is NOT stopped here any more — S-7, it never ran in v1.6.1.) */
     fun stopLiveSession() {
-        c.httpLive.stop()
+        LiveState.onEnded()
         runCatching {
             getApplication<Application>().sendBroadcast(Intent(RaniLiveActivity.ACTION_END_LIVE))
         }
@@ -293,22 +445,45 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         if (uid.isNotEmpty()) messages.value = c.chats.load(uid)
         // Best-effort remote config load (fail-soft: defaults apply when the panel table is not there yet).
         c.remoteConfig.refreshAsync(viewModelScope)
-        c.httpLive.onTurn = { u, a ->
-            if (c.store.emotionId == null && u.isNotEmpty()) emotion.value = Emotions.detect(u)
-            if (u.isNotEmpty()) add(ChatMessage("user", u))
-            if (a.isNotEmpty()) {
-                add(ChatMessage("assistant", a))
-                if (uid.isNotEmpty()) viewModelScope.launch {
-                    runCatching {
-                        val id = convoId ?: c.cloud.createConversation(uid, u, "gemini", c.store.liveModel ?: "live").also { convoId = it }
-                        c.cloud.addMessage(uid, id, "user", u, null, null)
-                        c.cloud.addMessage(uid, id, "assistant", a, "gemini", c.store.liveModel ?: "live")
-                        c.cloud.recordActivity(uid, "chat", mapOf("provider" to "gemini", "mode" to "live"))
-                    }
+        // N-2: when the Live call ends, the launch gate opens again — the
+        // next tap starts a fresh call. (While a call is live,
+        // startLiveSession() brings the existing Activity forward.)
+        viewModelScope.launch {
+            LiveState.active.collect { active -> if (!active) liveLaunchAtMs = 0L }
+        }
+        // v1.7.0 §19.5 / S-7: the Live transcript (user speech + RANI replies,
+        // fed by the page via RaniApp.onTranscript) drives the emotion DURING
+        // the call — auto-detect on every user turn, no tap, no restart.
+        // Manual emotionId (explicit picker choice) is the only override.
+        // It also keeps the local chat history: the same speaker's growing
+        // text (partial transcripts) replaces the last live line, a new
+        // speaker appends. The dead HttpLiveSession.onTurn used to do this
+        // and its cloud sync with it — that sync never fired in v1.6.1
+        // (the engine never ran), so live turns are local-only until the
+        // page can mark a turn final; the history the user sees is complete.
+        viewModelScope.launch {
+            var lastLiveChat: Pair<String, String>? = null
+            LiveState.transcript.collect { t ->
+                if (t == null || t.text.isBlank()) return@collect
+                val who = if (t.who == "user") "user" else "assistant"
+                if (who == "user" && c.store.emotionId == null) {
+                    applyEmotion(Emotions.detect(t.text))
                 }
+                val last = lastLiveChat
+                val lastMsg = messages.value.lastOrNull()
+                if (last != null && last.first == who && t.text.startsWith(last.second) &&
+                    lastMsg != null && lastMsg.role == who && lastMsg.content == last.second
+                ) {
+                    // Same speaker, text only grew (partial transcript) — the
+                    // last live line is still the tail of the list, replace it.
+                    messages.value = messages.value.dropLast(1) + ChatMessage(who, t.text)
+                    if (uid.isNotEmpty()) c.chats.save(uid, messages.value)
+                } else if (last?.first != who || last?.second != t.text) {
+                    add(ChatMessage(who, t.text))
+                }
+                lastLiveChat = who to t.text
             }
         }
-        c.httpLive.onUnavailable = { reason -> liveFallback.value = reason; c.store.lastLiveError = reason }
     }
 
     fun startListening() {
@@ -328,11 +503,11 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             busy.value = true; status.value = "Thinking..."
             try {
                 if (isImageRequest(t)) { generateImage(t); return@launch }
-                // Emotion: the user's own choice wins, then the panel tone, then detection.
-                val emo = c.store.emotionId?.let { Emotions.fromId(it) }
-                    ?: c.remoteConfig.tone()?.let { Emotions.fromId(it) }
-                    ?: Emotions.detect(t)
-                emotion.value = emo
+                // Emotion (§19.5, auto-first): detect() always runs; a manual
+                // pick is only an override when the user explicitly chose one
+                // (emotionId != null). The panel tone no longer outranks detection.
+                val emo = c.store.emotionId?.let { Emotions.fromId(it) } ?: Emotions.detect(t)
+                applyEmotion(emo)
                 val reply = c.ai.chat(messages.value, emo.style)
                 add(ChatMessage("assistant", reply.text)); status.value = "Speaking..."
                 syncToCloud(t, reply)
@@ -585,6 +760,25 @@ fun HomeScreen(
     val emotion by vm.emotion.collectAsState()
     val maintenance by session.maintenance.collectAsState(); val announcements by session.announcements.collectAsState()
     val awarenessOn by vm.awarenessOn.collectAsState(); val floatingOn by vm.floatingOn.collectAsState()
+    val liveVoiceOn by vm.liveVoiceOn.collectAsState(); val liveOn by vm.liveOn.collectAsState()
+    val autoCard by vm.autoCallCard.collectAsState()
+    val liveState by LiveState.state.collectAsState()
+    val liveActive by LiveState.active.collectAsState()
+    val liveCaption by LiveState.caption.collectAsState()
+    val liveCaptionWho by LiveState.captionWho.collectAsState()
+    val liveMuted by LiveState.muted.collectAsState()
+    // §19.8.4: the hero glow follows the auto-detected emotion's colour,
+    // cross-fading over ~600 ms when the feeling changes.
+    val glowColor by animateColorAsState(Emotions.glowColor(emotion), animationSpec = tween(600), label = "heroGlow")
+    // Hero character state mirrors the Live call (§19.1) so the hero is never
+    // a dead picture while a call is live.
+    val heroState = if (liveActive) when (liveState) {
+        "connecting", "thinking" -> CharState.Thinking
+        "listening" -> CharState.Listening
+        "speaking" -> CharState.Speaking
+        "error" -> CharState.Error
+        else -> CharState.Idle
+    } else state
     val voiceCheck by vm.voiceCheck.collectAsState()
     val briefing by world.items.collectAsState(); val briefingBusy by world.busy.collectAsState()
     val days by memory.days.collectAsState(); val favourites by memory.favourites.collectAsState()
@@ -593,6 +787,24 @@ fun HomeScreen(
 
     val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) vm.requestTalk()
+    }
+    // v1.7.0 §19.1: the mic ask for the auto-call — requested once; on grant
+    // the auto-call retries, on deny the inline hero card stays.
+    var micAutoRequested by remember { mutableStateOf(false) }
+    val micAutoPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        vm.maybeAutoCall(ok)
+    }
+    // Auto-call on cold start — once per process (HomeViewModel guard).
+    LaunchedEffect(Unit) {
+        vm.maybeAutoCall(
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    LaunchedEffect(autoCard) {
+        if (autoCard == "mic" && !micAutoRequested) {
+            micAutoRequested = true
+            micAutoPerm.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
     val overlayPerm = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         // Whichever flow asked for the permission, finish that one.
@@ -635,25 +847,44 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            // ---- Top bar (Stonic §11): name, Floating, Awareness, avatar ----
+            // ---- Top bar (Stonic §11 + §19.2): name, Floating, Live Voice, Awareness, avatar ----
+            // S-5 (360 dp): the fixed content is ~400 dp, so compress
+            // defensively — the title Column (weight 1f) collapses FIRST and
+            // the three controls + avatar never overflow. "Floating" is
+            // shortened to "Float", gaps shrink to 2 dp, label/switch gaps
+            // to 4 dp, and both switch labels use labelSmall. A real 360 dp
+            // render is still unverifiable in this environment and must be
+            // checked on the phone (QA checklist item 10).
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("RANI AI GF", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                    Text("YOUR VIRTUAL AI GIRLFRIEND", style = MaterialTheme.typography.labelSmall, color = Mute, letterSpacing = 2.sp)
+                Column(Modifier.weight(1f, fill = true)) {
+                    Text("RANI AI GF", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("YOUR VIRTUAL AI GIRLFRIEND", style = MaterialTheme.typography.labelSmall, color = Mute, letterSpacing = 1.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                TextButton({ vm.setFloating(!floatingOn) }) {
-                    Text("Floating", color = if (floatingOn) CircuitMemory else Mute, fontWeight = if (floatingOn) FontWeight.Bold else FontWeight.Normal)
+                TextButton({ vm.setFloating(!floatingOn) }, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)) {
+                    Text("Float", maxLines = 1, color = if (floatingOn) CircuitMemory else Mute, fontWeight = if (floatingOn) FontWeight.Bold else FontWeight.Normal)
                 }
+                Spacer(Modifier.width(2.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Awareness", style = MaterialTheme.typography.labelMedium, color = if (awarenessOn) Color(0xFF4ADE80) else Mute)
-                    Spacer(Modifier.width(6.dp))
+                    Text("Live Voice", style = MaterialTheme.typography.labelSmall, color = if (liveVoiceOn && liveOn) Color(0xFF4ADE80) else Mute, maxLines = 1)
+                    Spacer(Modifier.width(4.dp))
+                    Switch(
+                        checked = liveVoiceOn && liveOn,
+                        onCheckedChange = vm::setLiveVoice,
+                        enabled = liveOn,
+                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Color(0xFF22C55E), uncheckedTrackColor = Panel2),
+                    )
+                }
+                Spacer(Modifier.width(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Awareness", style = MaterialTheme.typography.labelSmall, color = if (awarenessOn) Color(0xFF4ADE80) else Mute, maxLines = 1)
+                    Spacer(Modifier.width(4.dp))
                     Switch(
                         checked = awarenessOn,
                         onCheckedChange = vm::setAwareness,
                         colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Color(0xFF22C55E), uncheckedTrackColor = Panel2),
                     )
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(2.dp))
                 RaniAvatar(38.dp, modifier = Modifier.clickable { onNav("about") })
             }
 
@@ -664,18 +895,122 @@ fun HomeScreen(
             Text(vm.greeting, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = VioletSoft, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 
             // ---- Centre: the character, full figure (never circular) ----
+            // §19.8: the glow behind her is the emotion's colour (§19.8.4);
+            // the character itself breathes/pulses with the Live state.
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Box(
                     Modifier.size(300.dp)
-                        .background(Brush.radialGradient(listOf(emotion.composeColor.copy(alpha = 0.30f), Color.Transparent)))
+                        .background(Brush.radialGradient(listOf(glowColor.copy(alpha = 0.30f), Color.Transparent)))
                 )
                 RaniCharacter(
-                    state, level, vm.lowPower,
+                    heroState, level, vm.lowPower,
                     Modifier.fillMaxWidth().height(320.dp).clickable { tapToTalk() },
                     fullFigure = true,
+                    liveState = if (liveActive) liveState else "idle",
+                    glowColor = glowColor,
+                    energy = Emotions.energy(emotion),
                 )
             }
-            StonicStatusBar(stateLabel(state, status, partial), emotion.composeColor)
+            // ---- §19.8.3 status pill (Stonic-style) + §19.1 caption + Mute/End ----
+            // While a call is live the pill replaces the generic status bar so
+            // pill and motion can never disagree; the emotion chip stays.
+            if (liveActive) {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    LiveStatusPill(liveState)
+                }
+                Text(
+                    when {
+                        liveCaption.isNotBlank() -> (if (liveCaptionWho.isNotBlank()) "$liveCaptionWho: " else "") + liveCaption
+                        liveState == "connecting" -> "Connecting to RANI…"
+                        else -> "I'm listening…"
+                    },
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    textAlign = TextAlign.Center, color = Color.White, fontSize = 14.sp,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    Button(
+                        { vm.setLiveMuted(!liveMuted) },
+                        Modifier.size(96.dp, 44.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Panel2, contentColor = Color.White),
+                    ) {
+                        Icon(if (liveMuted) Icons.Default.MicOff else Icons.Default.Mic, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (liveMuted) "Unmute" else "Mute")
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Button(
+                        { vm.stopLiveSession() },
+                        Modifier.size(96.dp, 44.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD92D20), contentColor = Color.White),
+                    ) { Text("End") }
+                }
+            } else {
+                StonicStatusBar(stateLabel(state, status, partial), emotion.composeColor)
+            }
+            // ---- §19.1.4 inline hero card — never a blocking screen ----
+            autoCard?.let { kind ->
+                Card(
+                    Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Panel),
+                    shape = RoundedCornerShape(18.dp),
+                ) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                when (kind) {
+                                    // S-2: the Live-engine-OFF card has its own
+                                    // copy — it must never blame a missing key.
+                                    "liveoff" -> "Live voice is off"
+                                    "nokey" -> "Add your Gemini key to talk"
+                                    "mic" -> "Microphone needed to talk — tap to allow."
+                                    else -> "The call did not connect."
+                                },
+                                Modifier.weight(1f), style = MaterialTheme.typography.titleMedium,
+                            )
+                            IconButton({ vm.dismissAutoCallCard() }) { Icon(Icons.Default.Close, "Dismiss") }
+                        }
+                        if (kind == "liveoff") {
+                            Text("Live voice is off — turn it on in Controls.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button({ onNav("controls") }) { Text("Open Controls") }
+                            }
+                        }
+                        if (kind == "nokey") {
+                            Text("RANI talks with your free Gemini key — or sign in and use the shared key.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button({ onNav("settings") }) { Text("Add Gemini Key") }
+                                // N-5 (§19.1.4): the second button the spec
+                                // requires. There is NO nav route to the auth
+                                // screen from Home — AppNav shows AuthScreen
+                                // only when the Firebase user is null — so
+                                // this signs the current session out, which
+                                // drops straight into AuthScreen (email /
+                                // Google sign-in). Signing in there restores
+                                // the pooled-key path, so the call can start
+                                // without an own key. Same mechanism as the
+                                // "Sign out" button in Settings; no new auth
+                                // screen invented.
+                                OutlinedButton({ session.signOut() }) { Text("Sign In") }
+                            }
+                        }
+                        if (kind == "mic") {
+                            Button({
+                                micAutoRequested = false
+                                micAutoPerm.launch(Manifest.permission.RECORD_AUDIO)
+                            }) { Text("Allow microphone") }
+                        }
+                        if (kind == "failed") {
+                            Text("The call did not connect. Check your internet and try again.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                            Button({
+                                vm.retryAutoCall(
+                                    ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                                )
+                            }) { Text("Try again") }
+                        }
+                    }
+                }
+            }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                 Row(
                     Modifier.clip(RoundedCornerShape(50)).background(Panel.copy(alpha = 0.85f))
@@ -688,9 +1023,10 @@ fun HomeScreen(
                 }
             }
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                VoiceOrb(state, level, vm.lowPower, Modifier.size(64.dp).clip(CircleShape).clickable { onNav("voice") })
+                VoiceOrb(heroState, level, vm.lowPower, Modifier.size(64.dp).clip(CircleShape).clickable { onNav("voice") })
             }
-            Text("Tap the figure or the orb to talk", Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = Mute, style = MaterialTheme.typography.labelMedium)
+            // During a live call the caption above replaces this hint (§19.1).
+            if (!liveActive) Text("Tap the figure or the orb to talk", Modifier.fillMaxWidth(), textAlign = TextAlign.Center, color = Mute, style = MaterialTheme.typography.labelMedium)
 
             // ---- Four Core Circuits (connector lines converge on the figure) ----
             CircuitsPanel(onCircuit = { onNav(it) })
@@ -830,6 +1166,52 @@ fun HomeScreen(
         }
     }
     ActionDialogs(vm)
+}
+
+/**
+ * v1.7.0 §19.8.3 — the Stonic-style status pill directly under the hero
+ * character, driven by the same LiveState as the character animation so pill
+ * and motion can never disagree. Dark panel #E6171130, 18 dp corners,
+ * #8B3DFF 1.5 dp stroke, white 13 sp text. Speaking = animated waveform,
+ * listening = mic icon, thinking = dots, connecting = spinner.
+ */
+@Composable
+private fun LiveStatusPill(liveState: String) {
+    val inf = rememberInfiniteTransition(label = "pillWave")
+    val bar1 by inf.animateFloat(6f, 18f, infiniteRepeatable(tween(450), RepeatMode.Reverse), label = "pb1")
+    val bar2 by inf.animateFloat(18f, 6f, infiniteRepeatable(tween(450), RepeatMode.Reverse), label = "pb2")
+    val bar3 by inf.animateFloat(8f, 16f, infiniteRepeatable(tween(550), RepeatMode.Reverse), label = "pb3")
+    Row(
+        Modifier.clip(RoundedCornerShape(18.dp))
+            .background(Color(0xE6171130))
+            .border(1.5.dp, Color(0xFF8B3DFF), RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        when (liveState) {
+            "speaking" -> Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.height(18.dp)) {
+                listOf(bar1, bar2, bar3).forEach { h ->
+                    Box(Modifier.width(3.dp).height(h.dp).background(Color.White, RoundedCornerShape(2.dp)))
+                }
+            }
+            "listening" -> Icon(Icons.Default.Mic, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            "thinking" -> Icon(Icons.Default.MoreHoriz, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            "connecting" -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = Color.White)
+            else -> Icon(Icons.Default.Mic, null, tint = Color.White, modifier = Modifier.size(16.dp))
+        }
+        Text(
+            when (liveState) {
+                "speaking" -> "RANI is speaking"
+                "listening" -> "RANI is listening"
+                "thinking" -> "RANI is thinking"
+                "connecting" -> "Connecting…"
+                "error" -> "Call ended"
+                else -> "RANI is ready"
+            },
+            color = Color.White, fontSize = 13.sp,
+        )
+    }
 }
 
 @Composable
