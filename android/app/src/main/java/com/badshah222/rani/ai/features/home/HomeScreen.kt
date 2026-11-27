@@ -42,7 +42,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.webkit.WebView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -343,9 +342,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         val changed = LiveState.muted.value != m
         LiveState.setMuted(m)
         // v1.9.0 §21.4: mute goes to the engine-held WebView (the hero no
-        // longer owns one). The old heroWebView path is kept as a fallback.
+        // longer owns one). F13: the old heroWebView fallback is deleted —
+        // the field was never assigned, so it was dead code.
         CallEngineHolder.engine?.setMuted(m)
-            ?: runCatching { heroWebView?.evaluateJavascript("window.setRaniMuted && setRaniMuted($m)", null) }
         if (changed) {
             runCatching {
                 getApplication<Application>().sendBroadcast(
@@ -381,26 +380,13 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
 
     /** v1.9.0 §20.1.4: push a newly detected emotion into the hero page —
      *  same setRaniEmotion call RaniLiveActivity.pushEmotionToPage makes.
-     *  v1.9.0 §21.4: the engine holds the WebView now. */
+     *  v1.9.0 §21.4: the engine holds the WebView now. F13: the dead
+     *  heroWebView fallback is deleted (the field was never assigned). */
     private fun pushEmotionToHeroPage(id: String, label: String, colorHex: String, style: String) {
-        val engine = CallEngineHolder.engine
-        if (engine != null) {
-            engine.pushEmotion(id, label, colorHex, style)
-            return
-        }
-        val wv = heroWebView ?: return
-        runCatching {
-            wv.evaluateJavascript(
-                "window.setRaniEmotion && setRaniEmotion('${jsEsc(id)}','${jsEsc(label)}','${jsEsc(colorHex)}','${jsEsc(style)}')",
-                null
-            )
-        }
+        val engine = CallEngineHolder.engine ?: return
+        engine.pushEmotion(id, label, colorHex, style)
     }
 
-    /** Escape a string for a single-quoted JS literal (styles contain
-     *  apostrophes, e.g. "the user's mood"). */
-    private fun jsEsc(s: String): String = s
-        .replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ").replace("\r", " ")
     val screenRecordingOn = MutableStateFlow(c.store.screenRecordingEnabled)
     fun setScreenRecording(v: Boolean) { c.store.screenRecordingEnabled = v; screenRecordingOn.value = v }
     val voicePrintGateOn = MutableStateFlow(c.store.voicePrintGate)
@@ -463,9 +449,6 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
      *  startLiveSession(); clearing it disposes the hero WebView (the call
      *  ends). Null = no hero call. */
     val heroLiveKey = MutableStateFlow<String?>(null)
-    /** The live hero WebView, handed over by HeroLiveWebView's update block
-     *  — Mute/End/emotion reach the page through it. Null when no hero call. */
-    @Volatile var heroWebView: WebView? = null
     /** Selected Gemini Live voice name — always one of the female voices (Aoede default). */
     val liveVoiceName: String get() = c.store.liveVoiceName
     /** Live call entry — v1.9.0 §21.4: the call runs in the persistent

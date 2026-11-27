@@ -60,11 +60,13 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
             store.language,
             store.assistantName,
             store.responseStyle,
+            store.petName,
         )
         // v1.9.0 §21.2 — the MEMORY block: same recall block the Live call
         // gets via &memory=. Omitted entirely when memory is empty.
+        // F6: the header uses the STORED pet name, like the prompt itself.
         val recall = memory?.buildRecallBlock().orEmpty()
-        return if (recall.isBlank()) base else base + "\n\nThings you remember about Babu Jaan:\n" + recall +
+        return if (recall.isBlank()) base else base + "\n\nThings you remember about ${store.petName}:\n" + recall +
             "\nUse these naturally — do not recite them, and never say \"according to my memory\". " +
             "A fact you are unsure of, confirm gently instead of asserting it."
     }
@@ -116,16 +118,17 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
      *  makes gpt-oss refuse outright — so the identity is stated positively
      *  only, at the end where the model weighs it most. */
     private fun composeWorkerChat(system: String, history: List<ChatMessage>): String {
+        val pet = store.petName
         val turns = history.takeLast(8).toMutableList()
         while (turns.size > 1) {
             val q = buildString {
                 append(system.trim()).append("\n\n")
-                append("Recent conversation (you are RANI, the user is Babu Jaan):\n")
+                append("Recent conversation (you are RANI, the user is $pet):\n")
                 for (m in turns) {
-                    append(if (m.role == "assistant") "RANI: " else "Babu Jaan: ")
+                    append(if (m.role == "assistant") "RANI: " else "$pet: ")
                         .append(m.content.trim()).append("\n")
                 }
-                append("\nNow answer as RANI, warmly and lovingly, in the same language as Babu Jaan.")
+                append("\nNow answer as RANI, warmly and lovingly, in the same language as $pet.")
             }
             if (q.length <= 6000) return q
             turns.removeAt(0)
@@ -133,10 +136,10 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
         return buildString {
             append(system.trim()).append("\n\n")
             for (m in turns) {
-                append(if (m.role == "assistant") "RANI: " else "Babu Jaan: ")
+                append(if (m.role == "assistant") "RANI: " else "$pet: ")
                     .append(m.content.trim()).append("\n")
             }
-            append("\nNow answer as RANI, warmly and lovingly, in the same language as Babu Jaan.")
+            append("\nNow answer as RANI, warmly and lovingly, in the same language as $pet.")
         }.take(6000)
     }
 

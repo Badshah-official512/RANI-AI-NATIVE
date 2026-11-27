@@ -68,13 +68,17 @@ object AwarenessCamera {
                 try {
                     val p = future.get()
                     provider = p
+                    // F9: unbind ONLY our previously bound analysis use case.
+                    // unbindAll() also killed the Camera View screen's preview
+                    // (or any other camera use) if it was open.
+                    val prev = analysis
                     val analysis = ImageAnalysis.Builder()
                         .setTargetResolution(Size(640, 480))
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
                     this.analysis = analysis
                     analysis.setAnalyzer(executor) { image -> onImage(image) }
-                    p.unbindAll()
+                    prev?.let { runCatching { p.unbind(it) } }
                     p.bindToLifecycle(owner, CameraSelector.DEFAULT_FRONT_CAMERA, analysis)
                     running = true
                     _visionState.value = "seeing"
@@ -110,7 +114,9 @@ object AwarenessCamera {
     fun stop() {
         running = false
         onFrame = null
-        try { provider?.unbindAll() } catch (e: Exception) { }
+        // F9 (same as start): unbind only our own analysis use case, so a
+        // Camera View preview open elsewhere keeps working.
+        try { analysis?.let { provider?.unbind(it) } } catch (e: Exception) { }
         analysis = null
         provider = null
         _visionState.value = "off"
@@ -144,18 +150,21 @@ object AwarenessCamera {
                 }
             }
             // Interleaved VU (NV21): V first, then U, respecting pixel stride.
+            // F10: the V plane has its OWN row/pixel stride — YUV_420_888
+            // does not guarantee it shares the U plane's. Using the U
+            // strides for V garbled frames on some devices.
             val uBuf = uPlane.buffer
             val vBuf = vPlane.buffer
-            val uvRowStride = uPlane.rowStride
-            val uvPixelStride = uPlane.pixelStride
-            var dst = ySize
+            var dst = w * h // Y was copied compacted (w*h bytes), not ySize
             val uvH = h / 2
             val uvW = w / 2
             for (r in 0 until uvH) {
                 for (c in 0 until uvW) {
-                    val vIndex = r * uvRowStride + c * uvPixelStride
+                    val vIndex = r * vPlane.rowStride + c * vPlane.pixelStride
                     val uIndex = r * uPlane.rowStride + c * uPlane.pixelStride
+                    if (dst >= nv21.size) break
                     if (vIndex < vBuf.limit()) nv21[dst++] = vBuf.get(vIndex)
+                    if (dst >= nv21.size) break
                     if (uIndex < uBuf.limit()) nv21[dst++] = uBuf.get(uIndex)
                 }
             }

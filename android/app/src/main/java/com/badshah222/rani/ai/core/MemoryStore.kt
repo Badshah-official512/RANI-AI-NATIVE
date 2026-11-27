@@ -131,16 +131,25 @@ class MemoryStore(
 
     /** Finalizes the current session: transcript + summary + facts are
      *  written to the store (background dispatcher — never blocks the call
-     *  UI; a save failure is logged, never shown to the user). */
+     *  UI; a save failure is logged, never shown to the user). The session
+     *  is SNAPSHOT synchronously here, before the coroutine launches —
+     *  otherwise a new call started in between would sweep its turns
+     *  into this session's transcript/summary/facts (F7 fix). */
     fun finalizeSession(source: String) {
         if (!isOn()) return
+        val turns: List<Turn>
+        val startedAt: Long
+        synchronized(lock) {
+            if (sessionTurns.isEmpty()) return
+            turns = sessionTurns.toList()
+            startedAt = sessionStartedAt
+            sessionTurns.clear()
+            sessionStartedAt = 0L
+            sessionSource = ""
+        }
         scope.launch {
             synchronized(lock) {
-                if (sessionTurns.isEmpty()) return@synchronized
-                if (sessionSource.isNotEmpty() && sessionSource != source) {
-                    // A different source took over already — finalize what we have.
-                }
-                finalizeLocked(source)
+                finalizeSnapshot(turns, startedAt, source)
             }
         }
     }
@@ -151,6 +160,14 @@ class MemoryStore(
         sessionTurns.clear()
         val startedAt = sessionStartedAt
         sessionStartedAt = 0L
+        sessionSource = ""
+        finalizeSnapshot(turns, startedAt, source)
+    }
+
+    /** Writes one snapshotted session (turns already detached from the
+     *  live buffer by the caller). Caller must hold [lock]. */
+    private fun finalizeSnapshot(turns: List<Turn>, startedAt: Long, source: String) {
+        if (turns.isEmpty()) return
         try {
             val summary = buildSummary(turns)
             val facts = extractFacts(turns)
@@ -189,17 +206,23 @@ class MemoryStore(
             state.put("facts", factsObj)
             state.put("pending_facts", pending)
             // Mood baseline: a mood stated in 2+ different sessions becomes a baseline.
+            // F11(a): the baseline REFRESHES when a different mood reaches
+            // count >= 2 — a once-set baseline must not freeze forever.
             val mood = moodWord(turns)
             if (mood != null) {
                 val counts = state.optJSONObject("mood_counts") ?: JSONObject()
                 val n = counts.optInt(mood, 0) + 1
                 counts.put(mood, n)
                 state.put("mood_counts", counts)
-                if (n >= 2 && !factsObj.has("mood_baseline")) {
-                    factsObj.put("mood_baseline", JSONObject().put("value", "often feels $mood")
-                        .put("confidence", "low").put("source", "inferred")
-                        .put("updated_at", System.currentTimeMillis()))
-                    state.put("facts", factsObj)
+                if (n >= 2) {
+                    val newBaseline = "often feels $mood"
+                    val existing = factsObj.optJSONObject("mood_baseline")?.optString("value").orEmpty()
+                    if (existing != newBaseline) {
+                        factsObj.put("mood_baseline", JSONObject().put("value", newBaseline)
+                            .put("confidence", "low").put("source", "inferred")
+                            .put("updated_at", System.currentTimeMillis()))
+                        state.put("facts", factsObj)
+                    }
                 }
             }
             persistLocked()
@@ -249,8 +272,12 @@ class MemoryStore(
             if (sums.length() == 0) return ""
         }
         val sb = StringBuilder()
-        sb.append("Things you remember about Babu Jaan:\n")
-        val sorted = facts.sortedWith(compareByDescending<MemoryFact> { it.updatedAt })
+        // F5: no header here — both consumers prepend their own
+        // ("Things you remember about <pet>:"), which duplicated the line.
+        val sorted = facts.sortedWith(
+            compareByDescending<MemoryFact> { it.confidence == "high" }
+                .thenByDescending { it.updatedAt },
+        )
         for (f in sorted.take(15)) {
             val line = if (f.confidence == "low") {
                 "- ${f.key}: you think it is \"${f.value}\" (not certain — confirm gently)"
@@ -291,7 +318,10 @@ class MemoryStore(
             out.add(MemoryFact(k, o.optString("value"), o.optString("confidence", "high"),
                 o.optString("source", "said"), o.optLong("updated_at", 0L)))
         }
-        return out.sortedByDescending { it.updatedAt }
+        return out.sortedWith(
+            compareByDescending<MemoryFact> { it.confidence == "high" }
+                .thenByDescending { it.updatedAt },
+        )
     }
 
     fun pendingFacts(): List<MemoryFact> {
@@ -311,6 +341,16 @@ class MemoryStore(
             val obj = state.optJSONObject("facts") ?: JSONObject()
             obj.remove(key)
             state.put("facts", obj)
+            // F2: also drop it from pending_facts — the Memory screen's
+            // pending list deletes through this same call, and without
+            // this the item stayed on screen after refresh.
+            val pending = state.optJSONArray("pending_facts") ?: JSONArray()
+            val kept = JSONArray()
+            for (i in 0 until pending.length()) {
+                val o = pending.optJSONObject(i) ?: continue
+                if (o.optString("key") != key) kept.put(o)
+            }
+            state.put("pending_facts", kept)
             persistLocked()
         }
     }
@@ -412,6 +452,14 @@ class MemoryStore(
             Regex("(?i)my favou?rite (?:film|movie) is ([^.,!]{2,60})").find(raw)?.let { put("favourite_film", it.groupValues[1]) }
             Regex("(?i)my favou?rite show is ([^.,!]{2,60})").find(raw)?.let { put("favourite_show", it.groupValues[1]) }
             // Likes / dislikes.
+            // F3: capture-BEFORE patterns — in "mujhe biryani pasand hai"
+            // nothing follows "pasand hai", so the after-patterns below
+            // can never match Roman Urdu. These run first; the English
+            // after-patterns still win when something does follow.
+            // [^.,!] keeps one capture from spanning a second clause
+            // ("mujhe biryani pasand hai, mujhe cricket nahi pasand").
+            Regex("(?i)mujhe ([^.,!]+?) pasand hai").find(raw)?.let { put("likes", it.groupValues[1]) }
+            Regex("(?i)mujhe ([^.,!]+?) nahi pasand").find(raw)?.let { put("dislikes", it.groupValues[1]) }
             Regex("(?i)(?:i like|i love|i really like|mujhe .*? pasand hai)\\s+([^.,!]{2,60})").find(raw)?.let {
                 val v = it.groupValues[1].trim()
                 if (v.isNotEmpty() && !v.startsWith("to ")) put("likes", v)
@@ -422,6 +470,10 @@ class MemoryStore(
             // Birthday / anniversary.
             Regex("(?i)my birthday is ([^.,!]{2,40})").find(raw)?.let { put("birthday", it.groupValues[1]) }
             Regex("(?i)my birthday is on ([^.,!]{2,40})").find(raw)?.let { put("birthday", it.groupValues[1]) }
+            // F11(b): the category list has "anniversary" but no pattern
+            // ever produced it — only birthday was extracted.
+            Regex("(?i)my anniversary is ([^.,!]{2,40})").find(raw)?.let { put("anniversary", it.groupValues[1]) }
+            Regex("(?i)my anniversary is on ([^.,!]{2,40})").find(raw)?.let { put("anniversary", it.groupValues[1]) }
             // Plans.
             Regex("(?i)(?:tomorrow i (?:have|am going to|will)|i am going to|my paper is on|i have a paper on)\\s+([^.,!]{2,80})").find(raw)?.let {
                 put("plans", it.groupValues[1])

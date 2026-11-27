@@ -27,6 +27,11 @@ sealed class PhoneAction {
     object OpenContacts : PhoneAction()
     data class SetAlarm(val hour24: Int, val minute: Int, val label: String? = null) : PhoneAction()
     data class StartTimer(val seconds: Int, val label: String? = null) : PhoneAction()
+    /** F4 (v1.9.0 §21.8): the chat path gets the same new tools as Live. */
+    data class Reminder(val text: String, val whenText: String = "") : PhoneAction()
+    data class OpenSettings(val section: String = "") : PhoneAction()
+    data class PlayMusic(val query: String, val app: String = "") : PhoneAction() // app: "" = YouTube Music | "spotify"
+    object TakePhoto : PhoneAction()
     data class WebSearch(val query: String) : PhoneAction()
     /** The assistant's OWN in-app browser (empty query = just open it). Handled by the UI layer, not the executor. */
     data class OpenBrowser(val query: String) : PhoneAction()

@@ -56,6 +56,17 @@ object CommandParser {
             return PhoneAction.Sms(cleanName(it.groupValues[1]), original(t, it.groupValues[2]))
         }
 
+        // ---- reminders (F4: same tool as Live set_reminder) ----
+        Regex("^remind me to (.+?)(?: (?:at|on|in|tomorrow|today) ?(.*))?$").find(l)?.let {
+            return PhoneAction.Reminder(original(t, it.groupValues[1]), original(t, it.groupValues[2]))
+        }
+        Regex("^mujhe (.+?) (?:ki )?yaad dila(?:o| do| dena)$").find(l)?.let {
+            return PhoneAction.Reminder(original(t, it.groupValues[1]), "")
+        }
+        Regex("^(?:set )?(?:a )?reminder (?:to |for )?(.+)$").find(l)?.let {
+            return PhoneAction.Reminder(original(t, it.groupValues[1]), "")
+        }
+
         // ---- calls ----
         Regex("^(?:please )?(?:call|dial|phone|ring)(?: up)? (.+)$").find(l)?.let { return PhoneAction.Call(cleanName(it.groupValues[1])) }
         Regex("^(.+?) ko (?:call|phone|dial) (?:karo|kar do|lagao|laga do)$").find(l)?.let { return PhoneAction.Call(cleanName(it.groupValues[1])) }
@@ -77,6 +88,38 @@ object CommandParser {
         // ---- gallery videos / files (before generic open: they contain "video"/"file") ----
         if (Regex("\\b(videos?|movies?)\\b").containsMatchIn(l) && Regex("\\b(open|kholo|khol|chalao|lagao|dikhao|play|watch)\\b").containsMatchIn(l)) return PhoneAction.OpenVideos
         if (Regex("\\b(files?|downloads?|file manager|documents?)\\b").containsMatchIn(l) && Regex("\\b(open|kholo|khol|chalao|dikhao|show)\\b").containsMatchIn(l)) return PhoneAction.OpenFiles
+
+        // ---- play music (F4: same tool as Live play_music) ----
+        Regex("^play (.+?) on spotify$").find(l)?.let { return PhoneAction.PlayMusic(original(t, it.groupValues[1]), "spotify") }
+        Regex("^play (.+?) on (?:youtube music|yt music)$").find(l)?.let { return PhoneAction.PlayMusic(original(t, it.groupValues[1]), "youtube music") }
+        Regex("^(?:play|chalao|chala do|sunao) (.+?) (?:on spotify|spotify (?:par|pe|mein))$").find(l)?.let { return PhoneAction.PlayMusic(original(t, it.groupValues[1]), "spotify") }
+        Regex("^(.+?) (?:spotify par|spotify pe|spotify mein) (?:chalao|chala do|play karo|sunao)$").find(l)?.let { return PhoneAction.PlayMusic(original(t, it.groupValues[1]), "spotify") }
+        if (Regex("^(?:play )?(?:some )?music$").matches(l) || Regex("^(music|gana|gaana|song)(?: chalao| chala do| play karo| sunao)?$").matches(l)) return PhoneAction.PlayMusic("", "")
+        Regex("^play (.+)$").find(l)?.let {
+            val q = it.groupValues[1].trim()
+            if (q !in listOf("videos", "video", "movies", "movie")) return PhoneAction.PlayMusic(original(t, q), "")
+        }
+
+        // ---- take a photo (F4: same tool as Live take_photo) ----
+        if (Regex("\\b(photo|selfie|tasveer|picture)\\b").containsMatchIn(l) &&
+            Regex("\\b(take|lo|le|khincho|kheencho|capture|click|banao)\\b").containsMatchIn(l)) return PhoneAction.TakePhoto
+
+        // ---- open a settings page (F4: same tool as Live open_settings) ----
+        if (l.contains("settings") || l.contains("setting")) {
+            val section = when {
+                l.contains("wifi") || l.contains("wi-fi") || l.contains("wireless") -> "wifi"
+                l.contains("bluetooth") -> "bluetooth"
+                l.contains("display") || l.contains("brightness") || l.contains("screen") -> "display"
+                l.contains("sound") || l.contains("volume") || l.contains("audio") -> "sound"
+                l.contains("battery") -> "battery"
+                l.contains("location") -> "location"
+                l.contains("apps") || l.contains("applications") -> "apps"
+                l.contains("notification") -> "notifications"
+                l.contains("accessibility") -> "accessibility"
+                else -> ""
+            }
+            return PhoneAction.OpenSettings(section)
+        }
 
         // ---- device info + volume (MYRA-style system control) ----
         if (l.contains("battery")) return PhoneAction.DeviceInfo("battery")

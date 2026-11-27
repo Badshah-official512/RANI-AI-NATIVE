@@ -248,18 +248,27 @@ class CallEngine(private val activity: MainActivity) {
         val wv = webView ?: return
         webView = null
         isActive = false
+        // Capture the bridge now: the block below is posted to the main
+        // thread, and nulling the field first would skip releaseMic().
+        val b = bridge
+        bridge = null
         activity.runOnUiThread {
             if (!fromPage) {
                 runCatching { wv.evaluateJavascript("if(window.endRaniCall) endRaniCall();", null) }
             }
-            runCatching { bridge?.releaseMic() }
-            runCatching { wv.stopLoading() }
-            runCatching { wv.loadUrl("about:blank") }
-            runCatching { wv.removeJavascriptInterface("RaniApp") }
-            runCatching { (wv.parent as? ViewGroup)?.removeView(wv) }
-            runCatching { wv.destroy() }
+            // Mic release is immediate (and must run on the main thread).
+            runCatching { b?.releaseMic() }
+            // F8: evaluateJavascript is async — destroying the WebView in
+            // the same block could land first, so the page's teardown
+            // (socket close, mic release) never ran. Give it ~400 ms.
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                runCatching { wv.stopLoading() }
+                runCatching { wv.loadUrl("about:blank") }
+                runCatching { wv.removeJavascriptInterface("RaniApp") }
+                runCatching { (wv.parent as? ViewGroup)?.removeView(wv) }
+                runCatching { wv.destroy() }
+            }, 400)
         }
-        bridge = null
     }
 
     /** Activity is going away for good — release everything. */

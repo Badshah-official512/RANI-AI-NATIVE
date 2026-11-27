@@ -8,8 +8,13 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.AlarmClock
 import android.provider.MediaStore
+import android.provider.Settings
 import androidx.core.content.ContextCompat
+import com.badshah222.rani.ai.core.RaniAccessibilityService
+import com.badshah222.rani.ai.core.SecureStore
 import com.badshah222.rani.ai.domain.PhoneAction
+import org.json.JSONArray
+import org.json.JSONObject
 import java.net.URLEncoder
 
 sealed class PhoneResult {
@@ -56,6 +61,11 @@ class PhoneExecutor(private val ctx: Context) {
             PhoneResult.Done("Timer started for ${a.seconds / 60} min ${a.seconds % 60} sec.") else PhoneResult.Failed("No clock app found.")
         is PhoneAction.Call -> withNumber(a.target) { num -> if (launch(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(num))))) PhoneResult.Done("Dialer opened for $num. Press call to connect.") else PhoneResult.Failed("No dialer found.") }
         is PhoneAction.Flashlight -> torch(a.on)
+        // ---- F4 (v1.9.0 §21.8): the chat path gets the same new tools as Live ----
+        is PhoneAction.Reminder -> setReminder(a.text, a.whenText)
+        is PhoneAction.OpenSettings -> openSettings(a.section)
+        is PhoneAction.PlayMusic -> playMusic(a.query, a.app)
+        PhoneAction.TakePhoto -> takePhoto()
         is PhoneAction.Sms -> withNumber(a.target) { num -> if (launch(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(num))).putExtra("sms_body", a.message))) PhoneResult.Done("Message ready for $num. Press send in your messages app.") else PhoneResult.Failed("No SMS app found.") }
         is PhoneAction.WhatsAppMessage -> withNumber(a.target) { num ->
             val e164 = toE164(num) ?: return@withNumber PhoneResult.Failed("I need the number with country code (for example +92...) to open WhatsApp.")
@@ -103,15 +113,101 @@ class PhoneExecutor(private val ctx: Context) {
         // v1.9.0 §21.1 — the chat path resolves through the SAME shared
         // AppResolver as the Live bridge (exact / normalised / fuzzy /
         // well-known table / "multiple:…" clarification).
+        // F12: launch through AppResolver.launch, not launchPackage — the
+        // resolver may return a Hit whose only launch route is the
+        // synthesized launcher intent (getLaunchIntentForPackage null),
+        // which launchPackage could never fire.
         return when (val r = com.badshah222.rani.ai.core.AppResolver.resolve(ctx, name)) {
             is com.badshah222.rani.ai.core.AppResolver.Result.Hit ->
-                if (launchPackage(r.packageName)) PhoneResult.Done("Opening ${r.label}.")
+                if (com.badshah222.rani.ai.core.AppResolver.launch(ctx, name) == "ok") PhoneResult.Done("Opening ${r.label}.")
                 else PhoneResult.Failed("I could not open \"${r.label}\".")
             is com.badshah222.rani.ai.core.AppResolver.Result.Multiple ->
                 PhoneResult.Failed("Do you mean ${r.names.joinToString(" or ")}?")
             com.badshah222.rani.ai.core.AppResolver.Result.NotFound ->
                 PhoneResult.Failed("I could not find an app called \"$name\".")
         }
+    }
+
+    /** Reminder: saved on-device in the existing tasks store (local only),
+     *  the same store the Live bridge and the Automation screen use. */
+    private fun setReminder(text: String, whenText: String): PhoneResult {
+        val t = text.trim()
+        if (t.isEmpty()) return PhoneResult.Failed("What should I remind you about?")
+        return try {
+            val store = SecureStore(ctx)
+            val arr = runCatching { JSONArray(store.tasksJson) }.getOrNull() ?: JSONArray()
+            arr.put(JSONObject()
+                .put("id", "rem_" + System.currentTimeMillis())
+                .put("title", t)
+                .put("due", whenText.trim())
+                .put("status", "pending"))
+            store.tasksJson = arr.toString()
+            PhoneResult.Done(if (whenText.isBlank()) "Reminder saved: \"$t\"." else "Reminder saved: \"$t\" ($whenText).")
+        } catch (e: Exception) { PhoneResult.Failed("Could not save the reminder.") }
+    }
+
+    /** Opens the exact settings page; toggles live where Android puts them. */
+    private fun openSettings(section: String): PhoneResult {
+        val action = when (section.trim().lowercase()) {
+            "wifi", "wi-fi", "wireless" -> Settings.ACTION_WIFI_SETTINGS
+            "bluetooth" -> Settings.ACTION_BLUETOOTH_SETTINGS
+            "display", "brightness", "screen" -> Settings.ACTION_DISPLAY_SETTINGS
+            "sound", "volume", "audio" -> Settings.ACTION_SOUND_SETTINGS
+            "battery" -> Settings.ACTION_BATTERY_SETTINGS
+            "location" -> Settings.ACTION_LOCATION_SOURCE_SETTINGS
+            "apps", "applications" -> Settings.ACTION_APPLICATION_SETTINGS
+            "notifications" -> Settings.ACTION_APP_NOTIFICATION_SETTINGS
+            "accessibility" -> Settings.ACTION_ACCESSIBILITY_SETTINGS
+            else -> Settings.ACTION_SETTINGS
+        }
+        return try {
+            val i = Intent(action)
+            if (action == Settings.ACTION_APP_NOTIFICATION_SETTINGS) {
+                i.putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
+            }
+            if (launch(i)) PhoneResult.Done("Opening settings.") else PhoneResult.Failed("Could not open settings.")
+        } catch (e: Exception) { PhoneResult.Failed("Could not open settings.") }
+    }
+
+    /** Opens the music app at the search; playback starts from the app's own UI. */
+    private fun playMusic(query: String, app: String): PhoneResult {
+        val q = query.trim()
+        if (app.lowercase().contains("spotify")) {
+            val i = Intent(Intent.ACTION_VIEW, Uri.parse("spotify:search:" + URLEncoder.encode(q, "UTF-8")))
+                .setPackage("com.spotify.music")
+            if (q.isEmpty()) {
+                if (com.badshah222.rani.ai.core.AppResolver.launch(ctx, "Spotify") == "ok") return PhoneResult.Done("Opening Spotify.")
+            } else if (launch(i)) return PhoneResult.Done("Playing \"$q\" on Spotify.")
+            if (com.badshah222.rani.ai.core.AppResolver.launch(ctx, "Spotify") == "ok") return PhoneResult.Done("Opening Spotify.")
+            return PhoneResult.Failed("Spotify is not installed on this phone.")
+        }
+        val url = if (q.isEmpty()) "https://music.youtube.com"
+        else "https://music.youtube.com/search?q=" + URLEncoder.encode(q, "UTF-8")
+        return if (launch(Intent(Intent.ACTION_VIEW, Uri.parse(url)))) {
+            PhoneResult.Done(if (q.isEmpty()) "Opening YouTube Music." else "Playing \"$q\" on YouTube Music.")
+        } else PhoneResult.Failed("Could not open YouTube Music.")
+    }
+
+    /** Opens the camera and taps the shutter via accessibility when the
+     *  service is ON. execute() runs on the main thread, so the shutter
+     *  retry (the camera app needs a moment to appear — see the bridge's
+     *  takePhoto, F1) runs on a worker thread, fire-and-forget. */
+    private fun takePhoto(): PhoneResult {
+        if (!launch(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))) {
+            return PhoneResult.Failed("No camera app found.")
+        }
+        val svc = RaniAccessibilityService.instance
+            ?: return PhoneResult.Done("Camera is open — tap the shutter to take the photo.")
+        Thread {
+            val deadline = System.currentTimeMillis() + 3000
+            while (System.currentTimeMillis() < deadline) {
+                for (label in listOf("Shutter", "Take photo", "Capture")) {
+                    if (svc.tapText(label) == "ok") return@Thread
+                }
+                try { Thread.sleep(300) } catch (e: InterruptedException) { return@Thread }
+            }
+        }.start()
+        return PhoneResult.Done("Taking your photo.")
     }
 
     /** MYRA-style system monitor answers, computed on-device — no internet needed. */

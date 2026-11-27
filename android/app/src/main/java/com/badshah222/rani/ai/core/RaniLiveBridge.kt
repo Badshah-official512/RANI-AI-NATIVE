@@ -526,15 +526,26 @@ class RaniLiveBridge(
      * Take a photo: open the camera, then tap the shutter via accessibility
      * when the service is ON. Service OFF -> the camera still opens and
      * RANI says "tap the shutter" ("opened", never a silent nothing).
+     *
+     * F1 fix: the shutter node does NOT exist the instant the camera intent
+     * returns — the camera app has not appeared yet — so a single immediate
+     * tap always missed and the function always fell through to "opened".
+     * This runs on the WebView JS-bridge (worker) thread, so it polls the
+     * shutter labels for up to ~3 s (every ~300 ms) and returns "ok" only
+     * on a real tap.
      */
     private fun takePhoto(): String {
         if (openCamera() != "ok") return "fail"
         val svc = RaniAccessibilityService.instance ?: return "opened"
-        // The camera app needs a moment to open; try the shutter labels in
-        // order. A missed tap still leaves the camera open for the user.
-        val r = svc.tapText("Shutter").let { if (it == "ok") it else svc.tapText("Take photo") }
-            .let { if (it == "ok") it else svc.tapText("Capture") }
-        return if (r == "ok") "ok" else "opened"
+        val labels = listOf("Shutter", "Take photo", "Capture")
+        val deadline = System.currentTimeMillis() + 3000
+        while (System.currentTimeMillis() < deadline) {
+            for (label in labels) {
+                if (svc.tapText(label) == "ok") return "ok"
+            }
+            try { Thread.sleep(300) } catch (e: InterruptedException) { break }
+        }
+        return "opened"
     }
 
     private fun openGallery(): String {
