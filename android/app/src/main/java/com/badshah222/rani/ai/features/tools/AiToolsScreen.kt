@@ -40,6 +40,7 @@ import com.badshah222.rani.ai.domain.RaniTools
 import com.badshah222.rani.ai.features.settings.TopBar
 import com.badshah222.rani.ai.ui.theme.*
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow // FIX (CI run #48): missing import — MutableStateFlow used at lines 74-77; its absence caused all 30 errors in AiToolsScreen.kt
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
