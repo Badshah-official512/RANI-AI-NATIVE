@@ -233,12 +233,14 @@ class FloatingOrbService : Service() {
             visibility = View.GONE
         }
         guardianDot = gDot
-        val gParams = WindowManager.LayoutParams(
+        // FIX (CI run #50): was `val gParams` — duplicate of the edge-glow
+        // params above in the same scope (2 conflicting-declaration errors).
+        val gdParams = WindowManager.LayoutParams(
             (14 * d).toInt(), (14 * d).toInt(), type,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
             PixelFormat.TRANSLUCENT,
         ).apply { gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL; x = (diaPx * 0.35).toInt(); y = (24 * d).toInt() + (diaPx * 0.82).toInt() }
-        runCatching { wm?.addView(gDot, gParams) }
+        runCatching { wm?.addView(gDot, gdParams) }
         running = true
         visHandler.post(visLoop)
     }

@@ -316,8 +316,13 @@ class ContactMind(private val ctx: Context) {
         // from the name (in save-OFF mode the name alone is ambiguous
         // again — e.g. 3 Amis, option 2 picked, now "Ami mobile").
         val pending = lastMultiNumber
-        val c = if (pending != null && normalize(base) == normalize(pending.name)) pending
-            else multiNumberContact(base) ?: return null
+        // FIX (CI run #50): `pending` is a PickedContact and multiNumberContact()
+        // returns a SavedContact — the untyped `if` inferred their common
+        // supertype (Any), so `.labels`/`.numbers` did not resolve (5 errors).
+        // Convert the pending pick to a SavedContact, same as line 341.
+        val c: SavedContact = if (pending != null && normalize(base) == normalize(pending.name))
+            SavedContact(pending.id, pending.name, normalize(pending.name), pending.numbers, pending.labels)
+        else multiNumberContact(base) ?: return null
         val n = pick.toIntOrNull()
         val idx = if (n != null) n - 1
             else c.labels.indexOfFirst { it.equals(pick, ignoreCase = true) }

@@ -25,8 +25,8 @@ class HisaabStore(ctx: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lock = Any()
     private val file = EncryptedFile.Builder(
-        java.io.File(appCtx.filesDir, "hisaab.json"),
         appCtx,
+        java.io.File(appCtx.filesDir, "hisaab.json"),
         MasterKey.Builder(appCtx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
         EncryptedFile.FileEncryptionScheme.AES256_GCM_HKDF_4KB,
     ).build()

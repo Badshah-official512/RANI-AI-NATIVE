@@ -453,7 +453,7 @@ class MemoryStore(
         val raw = text.trim()
         if (raw.isBlank() || isSecret(raw)) return
         val now = System.currentTimeMillis()
-        val m = Regex("(?i)^(.{2,40}?)\s+(?:is|hai|ka|ki|:)\s+(.{2,100})$").find(raw)
+        val m = Regex("(?i)^(.{2,40}?)\\s+(?:is|hai|ka|ki|:)\\s+(.{2,100})$").find(raw)
         val key = (m?.groupValues?.get(1)?.trim()?.lowercase()?.replace(Regex("[^a-z0-9 ]"), "")?.replace(" ", "_") ?: "note")
             .takeIf { it.isNotBlank() && it.length <= 40 } ?: "note"
         val value = cleanValue(m?.groupValues?.get(2) ?: raw) ?: return

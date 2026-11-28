@@ -51,7 +51,7 @@ import java.time.format.DateTimeFormatter
 
 /**
  * v3.0.0 §23.1 P2 — the free-tools suite. Every screen calls a LIVE
- * endpoint (Worker /api/tools/*, /api/news, or the public Aladhan API)
+ * endpoint (Worker /api/tools endpoints, /api/news, or the public Aladhan API)
  * and shows COMING_SOON honestly when the endpoint is down — a dead
  * endpoint never produces a fake answer. Verified live 2026-11-28:
  * weather, joke, fact, meme, ask, wiki, shorten, lyrics-search,
