@@ -94,7 +94,7 @@ class SecretChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
-        private const val SECRET_PASSWORD = "RANI0325"
+        private const val SECRET_PASSWORD = "BADSHAH@0325"
         private const val SECRET_SYSTEM =
             "You are RANI SECRET — the heavy-work mode of RANI AI, powered by the user's own Gemini key. " +
             "Do heavy work properly: complete coding projects with EVERY file complete, each file in its own fenced code block " +
