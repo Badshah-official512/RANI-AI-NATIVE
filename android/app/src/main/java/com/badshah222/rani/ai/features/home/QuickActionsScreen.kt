@@ -25,7 +25,7 @@ private data class QuickAction(val icon: ImageVector, val title: String, val exa
 
 private val ACTIONS = listOf(
     QuickAction(Icons.Default.Apps, "Open an app", "\"Open YouTube\"", "Open YouTube"),
-    QuickAction(Icons.Default.Call, "Call someone", "\"Call Ali\"", "Pick a contact"),
+    QuickAction(Icons.Default.Dialpad, "Dial someone", "\"Dial Ali\"", "Pick a contact"),
     QuickAction(Icons.Default.Message, "Send a message", "\"WhatsApp Papa\"", "Pick a contact"),
     QuickAction(Icons.Default.Send, "Type + send message", "\"Type a message to Ali and send it\"", "Type a message to Ali and send it: I am coming home"),
     QuickAction(Icons.Default.Contacts, "All contacts", "Call / message by name", null, route = "contacts"),

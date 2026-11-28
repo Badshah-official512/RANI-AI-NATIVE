@@ -53,6 +53,7 @@ import com.badshah222.rani.ai.core.FarewellDetector
 import com.badshah222.rani.ai.core.FloatingOrbService
 import com.badshah222.rani.ai.core.LiveState
 import com.badshah222.rani.ai.core.RaniAccessibilityService
+import com.badshah222.rani.ai.core.ScreenShareService
 import com.badshah222.rani.ai.data.phone.MessageSender
 import com.badshah222.rani.ai.data.phone.PhoneResult
 import com.badshah222.rani.ai.data.phone.SendOutcome
@@ -194,7 +195,11 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     private fun startVision() {
         val activity = CallEngineHolder.activity ?: return
         AwarenessCamera.start(activity) { b64 ->
-            if (LiveState.active.value && awarenessOn.value) {
+            // v3.0.0 §23.1 item 5 (dev-finish): pause camera frames while
+            // screen-sharing — one realtimeInput.video stream, never both
+            // sources at once. The screen frames flow from
+            // ScreenShareService instead; camera resumes when sharing stops.
+            if (LiveState.active.value && awarenessOn.value && !ScreenShareService.running.value) {
                 CallEngineHolder.engine?.sendCameraFrame(b64)
             }
         }
@@ -237,9 +242,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Minimize during a live call: with the overlay permission the floating
-     *  service starts at once so the call card appears over other apps;
+     *  service starts at once so the dot-field orb appears over other apps;
      *  without it, ask for it once (one tap in Settings) so the floating
-     *  call window can appear — otherwise the minimized call would be
+     *  orb can appear — otherwise the minimized call would be
      *  invisible and the boss could only return via the notification.
      *  B-1: the live call is LiveState (the WebView page), NOT the dead
      *  HttpLiveSession — this is also called from VoiceScreen and, via the
@@ -275,24 +280,39 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     fun setLive(v: Boolean) { c.store.liveEnabled = v; liveOn.value = v }
 
     // ---- v1.7.0 §19.2 "Live Voice" — auto-connect on app open (§19.1) ----
+    // v3.0.0 §23.3: the top-bar toggle is now the LIVE master switch.
+    // OFF mid-call ends the call AND stops future auto-connects; ON starts
+    // Live immediately. The toggle's visual state always matches
+    // LiveState.active — never ON-while-dead, never OFF-while-live.
     val liveVoiceOn = MutableStateFlow(c.store.autoVoiceEnabled)
+    /** Last mic-grant result seen by maybeAutoCall (so toggle-ON can retry
+     *  the auto-call without pretending the mic is granted). */
+    private var lastMicGranted = false
     fun setLiveVoice(v: Boolean) {
         c.store.autoVoiceEnabled = v
         liveVoiceOn.value = v
         val ctx = getApplication<Application>()
         if (!v) {
-            // OFF hides the floating avatar immediately (the service gates
-            // the orb on Live Voice). A live call is NOT killed — it only
-            // stops future auto-connects. S-6: the service is left running
-            // while a call is active so the floating call card survives;
-            // RaniLiveActivity stops it when the call ends if nothing
-            // wants it. When no call is active, stop it at once.
+            // OFF mid-call ends the call (master switch) and re-arms the
+            // auto-call guard, so the next app enter stays quiet until he
+            // turns it back ON himself.
+            autoCallAttempted = true
+            if (LiveState.active.value) stopLiveSession()
             if (!LiveState.active.value) FloatingOrbService.stop(ctx)
-        } else if (Settings.canDrawOverlays(ctx)) {
-            // ON (re)starts the service for the avatar/call card — the
-            // Floating toggle is not a condition (B-1b).
-            FloatingOrbService.start(ctx)
+        } else {
+            autoCallAttempted = false
+            autoCallCard.value = null
+            if (Settings.canDrawOverlays(ctx)) FloatingOrbService.start(ctx)
+            maybeAutoCall(lastMicGranted)
         }
+    }
+    /** v3.0.0 §23.3: the Live session flipped the switch herself
+     *  ("bas hogaya") via RaniLiveBridge.setLiveEnabled — refresh the
+     *  toggle without re-stopping a call that is already ending. */
+    fun setLiveVoiceExternal(v: Boolean) {
+        c.store.autoVoiceEnabled = v
+        liveVoiceOn.value = v
+        if (!v) autoCallAttempted = true
     }
 
     // ---- v1.7.0 §19.1 auto-call on app open (once per cold start) ----
@@ -304,8 +324,13 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
      *  not relaunch. */
     private var autoCallAttempted = false
     fun maybeAutoCall(micGranted: Boolean) {
+        lastMicGranted = micGranted
         if (autoCallAttempted) return
-        if (!c.store.autoVoiceEnabled) { autoCallAttempted = true; return }
+        // v3.0.0 §23.3: the guard is per Live-off event, not per ViewModel
+        // instance — toggle OFF returns WITHOUT consuming the attempt, so
+        // turning it back ON re-arms auto-live (process death + reopen must
+        // NOT re-arm auto-live when the toggle is OFF).
+        if (!c.store.autoVoiceEnabled) return
         // S-2: liveAvailable() is false for TWO different reasons — say
         // which one. Live engine OFF → the "liveoff" card (correct copy);
         // the "nokey" card is only for a genuinely missing key.
@@ -493,7 +518,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             LiveState.setState("connecting")
             val engine = CallEngineHolder.engine
             val memoryBlock = c.memory.buildRecallBlock()
-            val started = engine?.start(key, c.store.liveVoiceName, memoryBlock, c.store.petName) == true
+            val started = engine?.start(key, c.store.liveVoiceName, memoryBlock, c.store.petName, c.store.userName) == true
             if (!started) {
                 c.store.lastLiveError = "The call engine is not ready. Try again."
                 if (autoCallAttempted) autoCallCard.value = "failed"
@@ -518,6 +543,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
      *  broadcast only goes out when a call was actually live (hero key set
      *  or LiveState active). */
     fun stopLiveSession() {
+        // v3.0.0 §23.3: an explicit end consumes the auto-call attempt —
+        // ending a call must never auto-restart it on the next resume.
+        autoCallAttempted = true
         val wasLive = heroLiveKey.value != null || LiveState.active.value
         // v1.9.0 §21.4: destroy the engine WebView (idempotent — a second
         // call is a no-op once the engine has nulled it).
@@ -610,6 +638,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         if (farewellLastSpeaker == "user" && farewellLastUserText.isNotBlank()) {
             val turnText = farewellLastUserText
             val fired = FarewellDetector.detect(turnText, farewellPrevHadFarewell)
+            // v3.0.0 §23.3: "bas hogaya" ends the call AND turns the
+            // top-bar Live option OFF herself (unlike "good night").
+            val turnOff = FarewellDetector.isTurnOffPhrase(fired)
             val norm = FarewellDetector.normalize(turnText)
             farewellPrevHadFarewell = FarewellDetector.phraseIn(norm) != null &&
                 !FarewellDetector.isQuestionOrStory(turnText, norm)
@@ -624,7 +655,7 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                     if (LiveState.active.value &&
                         (farewellAssistantSaidGoodbye || farewellUserTurns == turnsAtFire)
                     ) {
-                        stopLiveSession()
+                        if (turnOff) setLiveVoice(false) else stopLiveSession()
                     }
                     farewellJob = null
                 }
@@ -638,6 +669,11 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         if (uid.isNotEmpty()) messages.value = c.chats.load(uid)
         // Best-effort remote config load (fail-soft: defaults apply when the panel table is not there yet).
         c.remoteConfig.refreshAsync(viewModelScope)
+        // v3.0.0 §23.6: proactive check pass on cold start (6-hourly alarm
+        // covers the rest). Safe actions only; sensitive ones need him.
+        viewModelScope.launch {
+            runCatching { com.badshah222.rani.ai.core.ProactiveEngine(getApplication(), c.store).checkNow() }
+        }
         // N-2: when the Live call ends, the launch gate opens again — the
         // next tap starts a fresh call. (While a call is live,
         // startLiveSession() returns at once — no second socket.)
@@ -723,9 +759,26 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     fun stopListening() = c.speech.stop()
     fun dismissError() { error.value = null }
 
+    /** v3.0.0 §23.1 item 28: active AI Mode ("" = none), shown as a bar
+     *  on top of Chat with an x to clear; persisted across restarts. */
+    val modeId = MutableStateFlow(c.store.modeId)
+    fun setMode(id: String) { c.store.modeId = id; modeId.value = id }
+    fun clearMode() { c.store.modeId = ""; modeId.value = "" }
+
     fun send(text: String) {
         val t = text.trim(); if (t.isEmpty() || busy.value) return
         error.value = null
+        // v3.0.0 §23.1 P1 item 7 — "yaad rakho: ..." inline memory command
+        // (BADSHAH shape): pre-send intercept -> MemoryStore + live sync
+        // + confirmation reply. Never reaches the chat model.
+        val rememberMatch = Regex("(?i)^(?:yaad rakho|remember this|remember that|remember)[:\\-]?\\s+(.+)$").find(t)
+        if (rememberMatch != null) {
+            add(ChatMessage("user", t))
+            c.memory.recordTurn("chat", "user", t)
+            c.memory.saveManualFact(rememberMatch.groupValues[1].trim())
+            reply("Noted — I will remember that.")
+            return
+        }
         add(ChatMessage("user", t))
         // v1.9.0 §21.2: typed chats feed the SAME memory store as Live calls.
         c.memory.recordTurn("chat", "user", t)
@@ -1008,6 +1061,8 @@ fun HomeScreen(
     val autoCard by vm.autoCallCard.collectAsState()
     val liveState by LiveState.state.collectAsState()
     val liveActive by LiveState.active.collectAsState()
+    // v3.0.0 §23.8 (dev-finish): screen-watch state for the hero pill.
+    val watchingScreen by ScreenShareService.running.collectAsState()
     val liveCaption by LiveState.caption.collectAsState()
     val liveCaptionWho by LiveState.captionWho.collectAsState()
     val liveMuted by LiveState.muted.collectAsState()
@@ -1045,8 +1100,9 @@ fun HomeScreen(
     }
     val awarenessState by vm.awarenessState.collectAsState()
     val awarenessError by vm.awarenessError.collectAsState()
-    // v1.9.0 §21.4: Back on Home mid-call minimises to the floating call
-    // card — it does NOT end the call. Only End ends it.
+    // v1.9.0 §21.4: Back on Home mid-call minimises to the dot-field orb
+    // (§23.2 — no call card any more) — it does NOT end the call. Only
+    // Stop ends it.
     BackHandler(enabled = liveActive) { vm.minimizeCall() }
     // v1.7.0 §19.1: the mic ask for the auto-call — requested once; on grant
     // the auto-call retries, on deny the inline hero card stays.
@@ -1059,6 +1115,12 @@ fun HomeScreen(
         vm.maybeAutoCall(
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         )
+    }
+    // v3.0.0 §23.3: she turned the top-bar Live switch off herself
+    // ("bas hogaya") — refresh the toggle from the bridge event.
+    val liveVoiceEvent by LiveState.liveVoiceEvent.collectAsState()
+    LaunchedEffect(liveVoiceEvent) {
+        liveVoiceEvent?.let { vm.setLiveVoiceExternal(it); LiveState.liveVoiceEvent.value = null }
     }
     LaunchedEffect(autoCard) {
         if (autoCard == "mic" && !micAutoRequested) {
@@ -1206,6 +1268,27 @@ fun HomeScreen(
                         }
                     }
                 }
+                // v3.0.0 §23.8 (dev-finish): "Watching screen" pill — the
+                // second of the three always-visible indicators while the
+                // screen watch runs (guardian dot on the orb, this pill,
+                // the notification). One tap stops the watch instantly;
+                // the Live call keeps going.
+                if (watchingScreen) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Row(
+                            Modifier.clip(RoundedCornerShape(18.dp))
+                                .background(Color(0xFF14532D).copy(alpha = 0.85f))
+                                .border(1.5.dp, Color(0xFF4ADE80), RoundedCornerShape(18.dp))
+                                .clickable { ScreenShareService.stop(ctx) }
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Box(Modifier.size(9.dp).clip(CircleShape).background(Color(0xFF4ADE80)))
+                            Text("Watching screen — tap to stop", color = Color.White, fontSize = 13.sp)
+                        }
+                    }
+                }
                 Text(
                     when {
                         liveCaption.isNotBlank() -> (if (liveCaptionWho.isNotBlank()) "$liveCaptionWho: " else "") + liveCaption
@@ -1227,11 +1310,11 @@ fun HomeScreen(
                         Text(if (liveMuted) "Unmute" else "Mute")
                     }
                     Spacer(Modifier.width(12.dp))
-                    Button(
-                        { vm.stopLiveSession() },
-                        Modifier.size(96.dp, 44.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD92D20), contentColor = Color.White),
-                    ) { Text("End") }
+                    // v3.0.0 §23.2 Fix 4: no red End button row — a small
+                    // neutral "Stop" text action. Mute/Stop live only here.
+                    TextButton({ vm.stopLiveSession() }, Modifier.height(44.dp)) {
+                        Text("Stop", color = Color.White)
+                    }
                 }
             } else {
                 StonicStatusBar(stateLabel(state, status, partial), emotion.composeColor)
@@ -1424,13 +1507,14 @@ fun HomeScreen(
             StonicSection("Quick Actions", Icons.Default.Bolt) {
                 val cards = listOf(
                     Triple(Icons.Default.Chat, "Chat", "Get instant answers") to "chat",
-                    Triple(Icons.Default.Call, "Voice Call", "Talk to RANI") to "voice",
+                    Triple(Icons.Default.RecordVoiceOver, "Talk to RANI", "Live voice with RANI") to "voice",
                     Triple(Icons.Default.Tune, "Controls", "Every switch, one by one") to "controls",
                     Triple(Icons.Default.Videocam, "Camera View", "See what RANI sees") to "camera",
                     Triple(Icons.Default.AutoAwesome, "Visual Hub", "Draw & explain") to "visualhub",
                     Triple(Icons.Default.Public, "Your World", "Daily briefing") to "world",
                     Triple(Icons.Default.Movie, "Recordings", "Screen recordings") to "recordings",
                     Triple(Icons.Default.Build, "AI Tools", "Summarise, translate…") to "tools",
+                    Triple(Icons.Default.GridView, "Free Tools", "Weather, news, namaz…") to "freetools",
                     Triple(Icons.Default.Language, "Website Builder", "Build a website") to "webforge",
                     Triple(Icons.Default.Code, "Coder", "Write code with AI") to "coder",
                     Triple(Icons.Default.Contacts, "Contacts", "Call / message by name") to "contacts",
@@ -1494,7 +1578,7 @@ private fun LiveStatusPill(liveState: String) {
                 "listening" -> "RANI is listening"
                 "thinking" -> "RANI is thinking"
                 "connecting" -> "Connecting…"
-                "error" -> "Call ended"
+                "error" -> "Live ended"
                 else -> "RANI is ready"
             },
             color = Color.White, fontSize = 13.sp,

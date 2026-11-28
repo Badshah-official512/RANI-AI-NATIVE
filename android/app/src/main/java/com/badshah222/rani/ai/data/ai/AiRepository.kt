@@ -54,7 +54,9 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
 
     /** The composed system instruction for the current personality + emotion + identity settings. */
     fun systemPrompt(emotionStyle: String): String {
-        val base = SystemPrompt.build(
+        // v3.0.0 §23.1 item 28: the active AI Mode's prompt prefix ("" = none).
+        val mode = com.badshah222.rani.ai.domain.RaniModes.fromId(store.modeId)
+        val base0 = SystemPrompt.build(
             Personalities.fromId(store.personalityId).prompt,
             emotionStyle,
             store.language,
@@ -62,6 +64,7 @@ class AiRepository(private val store: SecureStore, private val cloud: SupabaseAp
             store.responseStyle,
             store.petName,
         )
+        val base = if (mode != null) base0 + "\n\nCurrent mode — ${mode.title}: ${mode.prompt}" else base0
         // v1.9.0 §21.2 — the MEMORY block: same recall block the Live call
         // gets via &memory=. Omitted entirely when memory is empty.
         // F6: the header uses the STORED pet name, like the prompt itself.

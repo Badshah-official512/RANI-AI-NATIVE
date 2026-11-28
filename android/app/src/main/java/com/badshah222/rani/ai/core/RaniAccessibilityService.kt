@@ -145,6 +145,17 @@ class RaniAccessibilityService : AccessibilityService() {
         if (performGlobalAction(GLOBAL_ACTION_BACK)) "ok" else "fail"
     } catch (e: Exception) { "fail" }
 
+    /** v3.0.0 §23.1 P0: recent-apps + notification shade, same global-action
+     *  pattern as goBack/goHome. Gated behind Accessibility ON exactly like
+     *  BADSHAH — service OFF returns "noaccessibility" from the bridge. */
+    fun openRecents(): String = try {
+        if (performGlobalAction(GLOBAL_ACTION_RECENTS)) "ok" else "fail"
+    } catch (e: Exception) { "fail" }
+
+    fun openNotifications(): String = try {
+        if (performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)) "ok" else "fail"
+    } catch (e: Exception) { "fail" }
+
     fun goHome(): String = try {
         if (performGlobalAction(GLOBAL_ACTION_HOME)) "ok" else "fail"
     } catch (e: Exception) { "fail" }
@@ -190,7 +201,16 @@ class RaniAccessibilityService : AccessibilityService() {
         val out = ArrayList<String>()
         try { collectTexts(r, out) } catch (e: Exception) { }
         val joined = out.distinct().joinToString(" | ")
-        return if (joined.length > 1500) joined.substring(0, 1500) else joined
+        // v3.0.0 §23.8 item 2c (dev-finish): RANI never reads a password,
+        // OTP or card number aloud. Password-field nodes are already
+        // skipped in collectTexts(); here OTP-shaped runs (4-8 digits)
+        // and card-shaped runs (13-19 digits) are masked before the text
+        // reaches the model or a caption. (A year like 2026 is masked
+        // too — that is the accepted cost of never leaking a code.)
+        val masked = joined
+            .replace(Regex("\\b\\d{13,19}\\b"), "•••")
+            .replace(Regex("\\b\\d{4,8}\\b"), "•••")
+        return if (masked.length > 1500) masked.substring(0, 1500) else masked
     }
 
     // ---- v1.7.0 (§19.4) — app control, only when the user asks RANI to ----
@@ -247,19 +267,19 @@ class RaniAccessibilityService : AccessibilityService() {
      * Open the WhatsApp chat for a contact name or number with the message
      * drafted (wa.me link). The user presses Send himself — this never taps
      * Send on its own. Contacts stay on this phone, never uploaded.
+     * FIX-3: resolves through ContactMind.resolveToNumber — an ambiguous
+     * name (3 Amis), a multi-number contact or a near-miss returns the
+     * ask string and wa.me is NEVER opened for it.
      */
     fun sendWhatsApp(contactOrNumber: String, message: String): String {
         val target = contactOrNumber.trim()
         if (target.isEmpty()) return "fail"
         return try {
-            val digitsOnly = target.matches(Regex("^[+]?[0-9][0-9 \\-]{5,}$"))
-            val number = if (digitsOnly) target.replace(" ", "").replace("-", "")
-            else {
-                val entry = runCatching { ContactsHelper.findBest(this, target) }.getOrNull()
-                    ?: return "notfound"
-                runCatching { ContactsHelper.bestNumber(entry) }.getOrNull() ?: return "notfound"
-            }
-            val e164 = runCatching { ContactsHelper.toE164(this, number) }.getOrNull() ?: number
+            val resolved = com.badshah222.rani.ai.core.ContactMind(this).resolveToNumber(target)
+            if (resolved == "fail" || resolved == "notfound" || resolved == "notfound_nosave" || resolved == "nocontacts" ||
+                resolved.startsWith("multiple:") || resolved.startsWith("multiple_number:") ||
+                resolved.startsWith("nearmiss:")) return resolved
+            val e164 = runCatching { ContactsHelper.toE164(this, resolved) }.getOrNull() ?: resolved
             var url = "https://wa.me/" + e164.removePrefix("+")
             if (message.isNotBlank()) url += "?text=" + URLEncoder.encode(message, "UTF-8")
             val i = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -270,7 +290,10 @@ class RaniAccessibilityService : AccessibilityService() {
 
     private fun collectTexts(n: AccessibilityNodeInfo?, out: ArrayList<String>) {
         if (n == null) return
-        if (n.isVisibleToUser) {
+        // v3.0.0 §23.8 item 2c: never collect text from a password field —
+        // the node is skipped (children are still walked, in case a
+        // container is wrongly flagged).
+        if (n.isVisibleToUser && !n.isPassword) {
             val t = n.text?.toString()?.trim()
             val d = n.contentDescription?.toString()?.trim()
             if (!t.isNullOrEmpty()) out.add(t) else if (!d.isNullOrEmpty()) out.add(d)

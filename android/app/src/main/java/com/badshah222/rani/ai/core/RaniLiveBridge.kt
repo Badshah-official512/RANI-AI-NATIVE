@@ -2,6 +2,7 @@ package com.badshah222.rani.ai.core
 
 import android.content.Context
 import android.content.Intent
+import android.hardware.camera2.CameraManager
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -14,7 +15,14 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
 import android.webkit.JavascriptInterface
+import com.badshah222.rani.ai.RaniApp
 import com.badshah222.rani.ai.data.phone.ContactsHelper
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
@@ -52,6 +60,8 @@ class RaniLiveBridge(
 ) {
     private val appCtx: Context = ctx.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
+    /** v3.0.0 §23.1 items 3-4: in-call media jobs run async — never block the JS bridge thread. */
+    private val mediaScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Held audio-focus request (BADSHAH micTakeover pattern) — released by releaseMic(). */
     private var audioFocusReq: AudioFocusRequest? = null
@@ -178,6 +188,17 @@ class RaniLiveBridge(
                 "set_reminder" -> setReminder(s("text", "reminder", "title"), s("when", "time", "due"))
                 "open_settings" -> openSettings(s("section", "page", "setting"))
                 "set_volume" -> setVolume(s("direction", "level"))
+                // ---- v3.0.0 §23.1 P0 ----
+                "set_torch" -> torch(s("on").equals("true", ignoreCase = true))
+                "open_recents" -> svc?.openRecents() ?: "noaccessibility"
+                "open_notifications" -> svc?.openNotifications() ?: "noaccessibility"
+                "generate_image" -> generateImageAsync(s("prompt"))
+                "generate_video" -> generateVideo(s("prompt"))
+                "start_screen_share" -> startScreenShare()
+                "set_live_enabled" -> setLiveEnabled(s("enabled").equals("true", ignoreCase = true))
+                "end_call_upset" -> "ok" // the page ends the call itself after the toolResponse, like end_call
+                "uninstall_self" -> uninstallSelf()
+                "open_navigation" -> openNavigation(s("destination", "place", "query"))
                 "get_time" -> getTime()
                 "get_battery" -> getBattery()
                 "play_music" -> playMusic(s("query", "song"), s("app"))
@@ -338,19 +359,18 @@ class RaniLiveBridge(
     }
 
     /** WhatsApp draft via wa.me (mirrors the service): the chat opens with
-     *  the message drafted — the user presses Send himself. Never auto-sends. */
+     *  the message drafted — the user presses Send himself. Never auto-sends.
+     *  FIX-3: resolves through ContactMind.resolveToNumber — an ambiguous
+     *  name returns the ask string and wa.me is NEVER opened for it. */
     private fun intentSendWhatsApp(contactOrNumber: String, message: String): String {
         val target = contactOrNumber.trim()
         if (target.isEmpty()) return "fail"
         return try {
-            val digitsOnly = target.matches(Regex("^[+]?[0-9][0-9 \\-]{5,}$"))
-            val number = if (digitsOnly) target.replace(" ", "").replace("-", "")
-            else {
-                val entry = runCatching { ContactsHelper.findBest(appCtx, target) }.getOrNull()
-                    ?: return "notfound"
-                runCatching { ContactsHelper.bestNumber(entry) }.getOrNull() ?: return "notfound"
-            }
-            val e164 = runCatching { ContactsHelper.toE164(appCtx, number) }.getOrNull() ?: number
+            val resolved = ContactMind(appCtx).resolveToNumber(target)
+            if (resolved == "fail" || resolved == "notfound" || resolved == "notfound_nosave" || resolved == "nocontacts" ||
+                resolved.startsWith("multiple:") || resolved.startsWith("multiple_number:") ||
+                resolved.startsWith("nearmiss:")) return resolved
+            val e164 = runCatching { ContactsHelper.toE164(appCtx, resolved) }.getOrNull() ?: resolved
             var url = "https://wa.me/" + e164.removePrefix("+")
             if (message.isNotBlank()) url += "?text=" + URLEncoder.encode(message, "UTF-8")
             appCtx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -360,8 +380,9 @@ class RaniLiveBridge(
 
     // ---- v1.9.0 §21.8 — full voice phone control (intent + native tools) ----
     // Every tool reports back "ok" / "notfound" / "fail" / "noaccessibility"
-    // / "multiple:…" — a command NEVER silently does nothing. Messages stay
-    // draft/confirm, always. Contacts stay on-device, never uploaded.
+    // / "multiple:…" / "multiple_number:…" / "nearmiss:…" — a command NEVER
+    // silently does nothing. Messages stay draft/confirm, always. Contacts
+    // stay on-device, never uploaded.
     // Explicitly NOT added: notification reading, SMS/call-log reading,
     // remote control from any other device.
 
@@ -371,37 +392,39 @@ class RaniLiveBridge(
         true
     } catch (e: Exception) { false }
 
-    /** Resolves a contact name (or digits) to a number. Returns
-     *  "multiple:Name1, Name2" on a tie so RANI asks which one. */
-    private fun resolveNumber(target: String): String {
-        val t = target.trim()
-        if (t.isEmpty()) return "fail"
-        if (t.matches(Regex("^[+]?[0-9][0-9 \\-]{5,}$"))) return t.replace(" ", "").replace("-", "")
-        if (!ContactsHelper.hasPermission(appCtx)) return "nocontacts"
-        val all = runCatching { ContactsHelper.loadAll(appCtx) }.getOrDefault(emptyList())
-        val exact = all.filter { it.name.equals(t, ignoreCase = true) }
-        if (exact.size > 1) {
-            val names = exact.map { it.name }.distinct().take(3)
-            if (names.size > 1) return "multiple:" + names.joinToString(", ")
-        }
-        val entry = runCatching { ContactsHelper.findBest(appCtx, t) }.getOrNull() ?: return "notfound"
-        return runCatching { ContactsHelper.bestNumber(entry) }.getOrNull() ?: "notfound"
-    }
+    /** Resolves a contact name (or digits) to a number — FIX-2 delegates
+     *  to the single ContactMind.resolveToNumber() (pick path, number
+     *  pick, exact / ambiguous / near-miss, save-ON and save-OFF), so the
+     *  bridge, the Tools card, chat and auto-send can never drift apart
+     *  again. Returns a number, or "multiple:…", "multiple_number:…",
+     *  "nearmiss:…", "notfound", "notfound_nosave", "nocontacts" or "fail" — a question is
+     *  never a number. Callers MUST return all three prefixed results
+     *  without launching any intent (see the guards in callContact /
+     *  sendSms / intentSendWhatsApp). */
+    private fun resolveNumber(target: String): String =
+        ContactMind(appCtx).resolveToNumber(target)
 
     private fun callContact(target: String): String {
         val num = resolveNumber(target)
-        if (num == "fail" || num == "notfound" || num == "nocontacts" || num.startsWith("multiple:")) return num
+        // B1 fix: "multiple_number:" and "nearmiss:" MUST return here like
+        // "multiple:" — they are questions for the user, never numbers.
+        // ("multiple_number:…" does NOT start with "multiple:", so the old
+        // guard let it slip through to tel:multiple_number:… — the bug.)
+        if (num == "fail" || num == "notfound" || num == "notfound_nosave" || num == "nocontacts" || num.startsWith("multiple:") || num.startsWith("multiple_number:") || num.startsWith("nearmiss:")) return num
         return try {
-            // ACTION_CALL places the call at once — it is visible and he can
-            // hang up, so no confirm dialog (CALL_PHONE is already declared).
-            if (launchIntent(Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(num))))) "ok" else "fail"
+            // v3.0.0 §23.2 Fix 1: NEVER auto-dial. ACTION_DIAL only opens
+            // the dialer with the number filled in — the user presses Call
+            // himself. (the call permission is gone from the manifest.)
+            if (launchIntent(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(num))))) "ok" else "fail"
         } catch (e: SecurityException) { "fail" } catch (e: Exception) { "fail" }
     }
 
     /** SMS draft only — the user presses Send himself. Never auto-sent. */
     private fun sendSms(target: String, message: String): String {
         val num = resolveNumber(target)
-        if (num == "fail" || num == "notfound" || num == "nocontacts" || num.startsWith("multiple:")) return num
+        // B1 fix: same guard as callContact — a question is never a number,
+        // so it must never reach smsto:… (see the callContact comment).
+        if (num == "fail" || num == "notfound" || num == "notfound_nosave" || num == "nocontacts" || num.startsWith("multiple:") || num.startsWith("multiple_number:") || num.startsWith("nearmiss:")) return num
         return try {
             val i = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(num)))
             if (message.isNotBlank()) i.putExtra("sms_body", message)
@@ -461,12 +484,18 @@ class RaniLiveBridge(
         return try {
             val store = SecureStore(appCtx)
             val arr = runCatching { JSONArray(store.tasksJson) }.getOrNull() ?: JSONArray()
+            val id = "rem_${System.currentTimeMillis()}"
+            // v3.0.0 §23.1 item 21: parse the due time and schedule the
+            // firing alarm — reminders now FIRE, they are not just a list.
+            val dueEpoch = ReminderTime.parseDue(whenText.trim())
             arr.put(JSONObject()
-                .put("id", "rem_${System.currentTimeMillis()}")
+                .put("id", id)
                 .put("title", t)
                 .put("due", whenText.trim())
+                .put("dueEpoch", dueEpoch ?: JSONObject.NULL)
                 .put("status", "pending"))
             store.tasksJson = arr.toString()
+            if (dueEpoch != null) ReminderScheduler.schedule(appCtx, id, dueEpoch, t)
             "ok"
         } catch (e: Exception) { "fail" }
     }
@@ -585,6 +614,115 @@ class RaniLiveBridge(
             else if (launchIntent(Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI))) "ok"
             else "notfound"
         } catch (e: Exception) { "fail" }
+    }
+
+
+    // ---- v3.0.0 §23.1 P0 / §23.3 / §23.5 / §23.8 ----
+
+    /** Torch needs no permission and no camera app: CameraManager does it directly. */
+    private fun torch(on: Boolean): String {
+        return try {
+            val cm = appCtx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val id = cm.cameraIdList.firstOrNull { cid ->
+                runCatching { cm.getCameraCharacteristics(cid).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }.getOrDefault(false)
+            } ?: return "fail"
+            cm.setTorchMode(id, on)
+            "ok"
+        } catch (e: Exception) { "fail" }
+    }
+
+    /** v3.0.0 §23.1 item 3: in-call image generation via the EXISTING
+     *  AiRepository (Worker /api/image, pooled Gemini, Pollinations
+     *  fallback). Returns a data URI the page shows in the call, or a
+     *  plain status string. Runs synchronously with a 90 s cap — the
+     *  model waits for the toolResponse. */
+    @JavascriptInterface
+    /** v3.0.0 §23.1 item 3 (fixed from the first v3.0.0 draft): image
+     *  generation is ASYNC. The first draft blocked the WebView JS thread
+     *  with runBlocking(90s) — the mic pipeline lives on that thread, so
+     *  the voice would cut while the image was being made, breaking the
+     *  boss's order ("voice must NOT cut even if HTTP"). This returns
+     *  "started" at once; the finished image (or "" on failure) is pushed
+     *  into the page later via CallEngine.onGeneratedImage ->
+     *  window.onGeneratedImage(dataUri). */
+    private fun generateImageAsync(prompt: String): String {
+        if (prompt.isBlank()) return "fail"
+        val container = (appCtx as? RaniApp)?.container ?: return "fail"
+        mediaScope.launch {
+            val dataUri = try {
+                val bytes = container.ai.generateImage(prompt) ?: return@launch
+                "data:image/jpeg;base64," + android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            } catch (e: Exception) { "" }
+            CallEngineHolder.engine?.onGeneratedImage(dataUri)
+        }
+        return "started"
+    }
+
+    fun generateVideo(prompt: String): String {
+        if (prompt.isBlank()) return "fail"
+        val container = (appCtx as? RaniApp)?.container ?: return "fail"
+        mediaScope.launch {
+            try {
+                val bytes = container.ai.generateVideo(prompt)
+                val dir = java.io.File(appCtx.filesDir, "videos").apply { mkdirs() }
+                val f = java.io.File(dir, "rani_video_${System.currentTimeMillis()}.mp4").apply { writeBytes(bytes) }
+                LiveState.setCaption("RANI", "Your video is ready — saved as ${f.name} in Files.")
+            } catch (e: Exception) {
+                LiveState.setCaption("RANI", "The video could not finish — please try again in a bit.")
+            }
+        }
+        return "started"
+    }
+
+    /** v3.0.0 §23.1 item 5: screen-share into Live. The bridge cannot show
+     *  Android's MediaProjection consent dialog itself, so it raises a
+     *  request the app observes (AppNav navigates to the Screen Share
+     *  screen, which runs the system consent flow). Frames then flow via
+     *  ScreenShareService into the Live session (CallEngine.sendScreenFrame),
+     *  pausing Awareness camera frames while screen-sharing so the two
+     *  video sources never collide in one realtimeInput.video stream. */
+    @JavascriptInterface
+    fun startScreenShare(): String {
+        LiveState.screenShareRequested.value = true
+        return "ok"
+    }
+
+    /** v3.0.0 §23.3: "bas hogaya" — she turns the top-bar Live option OFF
+     *  herself. Persists autoVoiceEnabled=false and raises the event the
+     *  Home screen observes to refresh the toggle. The call itself is
+     *  ended by the end_call tool; this only flips the switch. */
+    @JavascriptInterface
+    fun setLiveEnabled(enabled: Boolean): String {
+        SecureStore(appCtx).autoVoiceEnabled = enabled
+        LiveState.liveVoiceEvent.value = enabled
+        return "ok"
+    }
+
+    /** v3.0.0 §23.5: self-uninstall, honest implementation. Android cannot
+     *  silently uninstall an app — this fires ACTION_DELETE for RANI's own
+     *  package and Android shows the SYSTEM confirmation dialog; only the
+     *  user tapping Uninstall removes the app. Gated by the Settings switch
+     *  (default OFF): with it OFF the tool is not declared and this returns
+     *  "disabled". Returns "dialog_shown" — never "ok"/"uninstalled": the
+     *  app cannot know the outcome after the dialog. */
+    private fun uninstallSelf(): String {
+        if (!SecureStore(appCtx).selfUninstallEnabled) return "disabled"
+        return try {
+            val i = Intent(Intent.ACTION_DELETE, Uri.parse("package:" + appCtx.packageName))
+            if (launchIntent(i)) "dialog_shown" else "fail"
+        } catch (e: Exception) { "fail" }
+    }
+
+    /** v3.0.0 §23.8 item 4: landmark route guidance + open Maps navigation.
+     *  Real Google Maps navigation intent; RANI keeps talking while Maps
+     *  runs in front. No turn-by-turn inside RANI (no Maps API). */
+    private fun openNavigation(destination: String): String {
+        val d = destination.trim()
+        if (d.isEmpty()) return "fail"
+        val nav = Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=" + URLEncoder.encode(d, "UTF-8")))
+        if (launchIntent(nav)) return "ok"
+        val geo = Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + URLEncoder.encode(d, "UTF-8")))
+        return if (launchIntent(geo)) "ok" else "fail"
     }
 
     private fun openBrowser(urlOrQuery: String): String {

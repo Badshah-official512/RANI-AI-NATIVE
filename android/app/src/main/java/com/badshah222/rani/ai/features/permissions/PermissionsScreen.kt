@@ -35,7 +35,6 @@ private val PERMS = listOf(
     Perm(Manifest.permission.RECORD_AUDIO, "Microphone", "Lets you talk to RANI. Audio is processed by Android speech recognition; the app does not record or store it."),
     Perm(Manifest.permission.CAMERA, "Camera", "Camera Share / vision — only runs when you tap the button in a call."),
     Perm(Manifest.permission.READ_CONTACTS, "Contacts — all of them", "RANI reads ALL your contacts on this phone, so she can call or message anyone by name. Contacts stay on this phone — they are never uploaded and never leave the phone."),
-    Perm(Manifest.permission.CALL_PHONE, "Phone calls", "Lets RANI open the dialer for a contact you named. You always press the call button yourself."),
     Perm(Manifest.permission.ACCESS_FINE_LOCATION, "Location", "\"Near me\" answers and location-aware replies. Only used when you ask."),
     Perm(Manifest.permission.READ_MEDIA_IMAGES, "Photos", "Share photos with RANI (vision) and save the images she makes.", Build.VERSION_CODES.TIRAMISU),
     Perm(Manifest.permission.READ_MEDIA_VIDEO, "Videos", "Share videos with RANI.", Build.VERSION_CODES.TIRAMISU),

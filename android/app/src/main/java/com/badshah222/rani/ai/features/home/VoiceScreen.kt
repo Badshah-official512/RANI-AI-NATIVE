@@ -85,7 +85,7 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     BackHandler { vm.minimizeCall(); onBack() }
 
     // v2.0.0 §22.2: NO auto-start. A live call starts ONLY from an
-    // explicit Start Call tap (button below). Opening this screen shows
+    // explicit Start Live tap (button below). Opening this screen shows
     // the idle state — navigating here from Chat after ending a call must
     // never start a new call by itself. The classic call still runs on
     // this screen, so it still starts on open when live is unavailable.
@@ -277,16 +277,16 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
                         // S-7: Mute goes through HomeViewModel → the page
                         // (window.setRaniMuted), not the dead engine.
                         ControlButton(if (liveMuted) Icons.Default.Mic else Icons.Default.MicOff, if (liveMuted) "Unmute" else "Mute", Panel2, Color.White) { vm.setLiveMuted(!liveMuted) }
-                        ControlButton(Icons.Default.CallEnd, "End", Bad, Color.White, big = true) { vm.stopLiveSession(); onBack() }
+                        ControlButton(Icons.Default.Stop, "Stop", Panel2, Color.White, big = true) { vm.stopLiveSession(); onBack() }
                     } else {
-                        // v2.0.0 §22.2: idle state — an explicit Start Call
+                        // v2.0.0 §22.2: idle state — an explicit Start Live
                         // button (Stonic style). A call starts ONLY from
                         // this tap, never from opening the screen.
-                        ControlButton(Icons.Default.Call, "Start Call", Violet, Color.White, big = true) { onStartCallTap() }
+                        ControlButton(Icons.Default.Mic, "Start Live", Violet, Color.White, big = true) { onStartCallTap() }
                     }
                 } else {
                     ControlButton(if (callMuted) Icons.Default.Mic else Icons.Default.MicOff, if (callMuted) "Unmute" else "Mute", Panel2, Color.White) { vm.setCallMuted(!callMuted) }
-                    ControlButton(Icons.Default.CallEnd, "End", Bad, Color.White, big = true) { vm.endCall(); onBack() }
+                    ControlButton(Icons.Default.Stop, "Stop", Panel2, Color.White, big = true) { vm.endCall(); onBack() }
                 }
                 ControlButton(Icons.Default.KeyboardArrowDown, "Minimize", Panel2, Color.White) { vm.minimizeCall(); onBack() }
             }

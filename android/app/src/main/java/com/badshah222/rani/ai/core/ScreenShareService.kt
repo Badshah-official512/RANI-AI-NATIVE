@@ -43,6 +43,20 @@ class ScreenShareService : Service() {
         }
 
         fun stop(ctx: Context) { ctx.stopService(Intent(ctx, ScreenShareService::class.java)) }
+
+        /** v3.0.0 §23.8: the never-watch list is ENFORCED — if the app in
+         *  front right now is on the list, screen watch must not start.
+         *  Returns the app label when blocked, null when it may start. */
+        fun blockedApp(ctx: Context): String? {
+            val never = runCatching {
+                org.json.JSONArray(SecureStore(ctx).screenWatchNeverJson)
+            }.getOrNull() ?: return null
+            val current = AwarenessMonitor.current.value ?: return null
+            for (i in 0 until never.length()) {
+                if (never.optString(i) == current.packageName) return current.appLabel
+            }
+            return null
+        }
     }
 
     private var projection: MediaProjection? = null
@@ -83,7 +97,29 @@ class ScreenShareService : Service() {
             val image = ir.acquireLatestImage() ?: return@setOnImageAvailableListener
             try {
                 if (now - lastPost >= 1200) {
-                    imageToBitmap(image, w, h)?.let { lastPost = now; frame.value = it }
+                    imageToBitmap(image, w, h)?.let { bmp ->
+                        lastPost = now
+                        frame.value = bmp
+                        // v3.0.0 §23.1 item 5 (dev-finish): feed the frame
+                        // into the Live session too — this was missing
+                        // (CallEngine.sendScreenFrame had zero callers, so
+                        // screen frames never reached RANI in a call).
+                        // Small JPEG (~640 wide, quality 70, same as the
+                        // Awareness camera frames), only while a call is
+                        // live. The camera feed pauses while sharing (the
+                        // startVision callback skips frames then), so the
+                        // two sources never collide in one video stream.
+                        if (LiveState.active.value) {
+                            runCatching {
+                                val small = if (bmp.width > 640) Bitmap.createScaledBitmap(bmp, 640, (bmp.height.toLong() * 640 / bmp.width).toInt().coerceAtLeast(2), true) else bmp
+                                val out = java.io.ByteArrayOutputStream()
+                                if (small.compress(Bitmap.CompressFormat.JPEG, 70, out)) {
+                                    CallEngineHolder.engine?.sendScreenFrame(android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP))
+                                }
+                                if (small !== bmp) small.recycle()
+                            }
+                        }
+                    }
                 }
             } catch (e: Exception) { /* a dropped frame is fine */ } finally { image.close() }
         }, handler)
@@ -120,8 +156,8 @@ class ScreenShareService : Service() {
         )
         val notif: Notification = NotificationCompat.Builder(this, "screen_share")
             .setSmallIcon(android.R.drawable.presence_video_online)
-            .setContentTitle("RANI AI — screen sharing is on")
-            .setContentText("Your screen is only sent to the AI when you ask. To stop, tap Stop in the app.")
+            .setContentTitle("RANI is watching your screen")
+            .setContentText("Tap here to return to RANI and stop watching instantly.")
             .setContentIntent(open)
             .setOngoing(true)
             .build()

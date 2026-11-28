@@ -79,6 +79,37 @@ class SecureStore(context: Context) {
     var assistantName: String get() = prefs.getString("assistant_name", "RANI")?.ifBlank { "RANI" } ?: "RANI"; set(v) = prefs.edit().putString("assistant_name", v).apply()
     /** The pet name RANI calls the user — default "Babu Jaan", editable in Settings. */
     var petName: String get() = prefs.getString("pet_name", "Babu Jaan")?.ifBlank { "Babu Jaan" } ?: "Babu Jaan"; set(v) = prefs.edit().putString("pet_name", v).apply()
+    /** v3.0.0 §23.5: the name she calls him in normal conversation.
+     *  Default "Badshah" (his name); editable in Settings. Blank = no
+     *  name at all — never silently fall back to "Babu Jaan". */
+    var userName: String get() = prefs.getString("user_name", "Badshah") ?: "Badshah"; set(v) = prefs.edit().putString("user_name", v).apply()
+    /** v3.0.0 §23.5: "Let RANI uninstall herself when sad" — default OFF.
+     *  Gates the uninstall_self Live tool's declaration entirely. */
+    var selfUninstallEnabled: Boolean get() = prefs.getBoolean("self_uninstall_enabled", false); set(v) = prefs.edit().putBoolean("self_uninstall_enabled", v).apply()
+    /** v3.0.0 §23.4: "Save my contacts to RANI's mind" — opt-in, default OFF. */
+    var contactsSaveEnabled: Boolean get() = prefs.getBoolean("contacts_save_enabled", false); set(v) = prefs.edit().putBoolean("contacts_save_enabled", v).apply()
+    /** v3.0.0 §23.6: proactive master switch (default ON) + per-type toggles. */
+    var proactiveEnabled: Boolean get() = prefs.getBoolean("proactive_enabled", true); set(v) = prefs.edit().putBoolean("proactive_enabled", v).apply()
+    var proactiveBattery: Boolean get() = prefs.getBoolean("proactive_battery", true); set(v) = prefs.edit().putBoolean("proactive_battery", v).apply()
+    var proactiveStorage: Boolean get() = prefs.getBoolean("proactive_storage", true); set(v) = prefs.edit().putBoolean("proactive_storage", v).apply()
+    var proactiveReminders: Boolean get() = prefs.getBoolean("proactive_reminders", true); set(v) = prefs.edit().putBoolean("proactive_reminders", v).apply()
+    var proactiveSpecialDays: Boolean get() = prefs.getBoolean("proactive_special_days", true); set(v) = prefs.edit().putBoolean("proactive_special_days", v).apply()
+    /** v3.0.0 §23.6: current proactive items (JSON, max 3) shown in the
+     *  recall block + history of what RANI did on her own (JSON). */
+    var proactiveItemsJson: String get() = prefs.getString("proactive_items", "[]") ?: "[]"; set(v) = prefs.edit().putString("proactive_items", v).apply()
+    var proactiveHistoryJson: String get() = prefs.getString("proactive_history", "[]") ?: "[]"; set(v) = prefs.edit().putString("proactive_history", v).apply()
+    /** v3.0.0 §23.8: Screen Watch master switch (default OFF) + the
+     *  "Never watch these apps" list (JSON of package names). */
+    var screenWatchEnabled: Boolean get() = prefs.getBoolean("screen_watch_enabled", false); set(v) = prefs.edit().putBoolean("screen_watch_enabled", v).apply()
+    var screenWatchNeverJson: String get() = prefs.getString("screen_watch_never", "[]") ?: "[]"; set(v) = prefs.edit().putString("screen_watch_never", v).apply()
+    /** v3.0.0 §23.1 item 28: active AI Mode id ("" = none). */
+    var modeId: String get() = prefs.getString("mode_id", "") ?: ""; set(v) = prefs.edit().putString("mode_id", v).apply()
+    /** v3.0.0 §23.1 item 19: Namaz city, default Swabi. */
+    var namazCity: String get() = prefs.getString("namaz_city", "Swabi") ?: "Swabi"; set(v) = prefs.edit().putString("namaz_city", v).apply()
+    /** v3.0.0 §23.1 item 30: App Lock — SHA-256 PIN hash in the encrypted
+     *  secrets store (never the PIN itself), + the master toggle. */
+    var appLockHash: String? get() = secrets.getString("app_lock_hash", null); set(v) = secrets.edit().apply { if (v == null) remove("app_lock_hash") else putString("app_lock_hash", v) }.apply()
+    var appLockEnabled: Boolean get() = prefs.getBoolean("app_lock_enabled", false); set(v) = prefs.edit().putBoolean("app_lock_enabled", v).apply()
     /** balanced | short | detailed */
     var responseStyle: String get() = prefs.getString("response_style", "balanced") ?: "balanced"; set(v) = prefs.edit().putString("response_style", v).apply()
     /** girl (RANI face) | logo (crown logo) */
@@ -130,8 +161,10 @@ class SecureStore(context: Context) {
     var tasksJson: String get() = prefs.getString("tasks", "[]") ?: "[]"; set(v) = prefs.edit().putString("tasks", v).apply()
 
     // ---- Stonic: Awareness, Face Lock, voice-print, screen recording ----
-    /** Awareness (front-app notice) — ON by default, Stonic-style; user can switch it off anytime. */
-    var awarenessEnabled: Boolean get() = prefs.getBoolean("awareness_enabled", true); set(v) = prefs.edit().putBoolean("awareness_enabled", v).apply()
+    /** Awareness (front-camera feed into Live) — v3.0.0 §23.8: default OFF
+     *  for the camera feed, because the boss's order is explicit: the
+     *  outside world is seen ONLY when he turns Awareness ON. */
+    var awarenessEnabled: Boolean get() = prefs.getBoolean("awareness_enabled", false); set(v) = prefs.edit().putBoolean("awareness_enabled", v).apply()
     /** v1.8.0 (§20.3) — the one-question onboarding has been completed.
      *  Default false: a fresh sign-in runs the onboarding first. */
     var onboardingDone: Boolean get() = prefs.getBoolean("onboarding_done", false); set(v) = prefs.edit().putBoolean("onboarding_done", v).apply()

@@ -64,7 +64,30 @@ object LiveState {
 
     fun onEnded() { _active.value = false; _state.value = "ended"; _caption.value = ""; _captionWho.value = ""; _audioLevel.value = 0f }
 
-    fun setCaption(who: String, text: String) { _captionWho.value = who; _caption.value = text }
+    /** v3.0.0 §23.2 Fix 5: phone-number-like digit runs are masked in
+     *  captions before display — the name is shown, never the digits. */
+    fun maskNumberText(text: String): String {
+        if (text.isBlank()) return text
+        var out = text
+        // Long digit runs (with spaces/dashes/+): mask the middle digits.
+        out = out.replace(Regex("[+]?[0-9][0-9 \\-.]{7,}[0-9]")) { m ->
+            val digits = m.value.filter { it.isDigit() }
+            if (digits.length < 8) m.value else "••• " + digits.takeLast(2)
+        }
+        return out
+    }
+
+    fun setCaption(who: String, text: String) { _captionWho.value = who; _caption.value = maskNumberText(text) }
+
+    /** v3.0.0 §23.1 item 5: the Live page asked to start screen-sharing —
+     *  AppNav observes this and opens the Screen Share screen (system
+     *  consent flow). Consumed (set back to false) by the observer. */
+    val screenShareRequested = MutableStateFlow(false)
+
+    /** v3.0.0 §23.3: the Live session flipped the top-bar Live switch
+     *  herself ("bas hogaya" -> OFF). The Home screen observes this and
+     *  refreshes the toggle. Null = no pending change. */
+    val liveVoiceEvent = MutableStateFlow<Boolean?>(null)
 
     fun setMuted(m: Boolean) { _muted.value = m }
 

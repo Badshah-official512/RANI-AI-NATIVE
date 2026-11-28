@@ -16,6 +16,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Contacts
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Image
@@ -67,6 +70,96 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     val petName = MutableStateFlow(c.store.petName)
     fun setAssistantName(n: String) { c.store.assistantName = n.trim().ifBlank { "RANI" }; assistantName.value = c.store.assistantName }
     fun setPetName(n: String) { c.store.petName = n.trim().ifBlank { "Babu Jaan" }; petName.value = c.store.petName }
+    // ---- v3.0.0 §23.5: "Your name" — the name she calls him (default "Badshah"). ----
+    val userName = MutableStateFlow(c.store.userName)
+    fun setUserName(n: String) { c.store.userName = n.trim().ifBlank { "Badshah" }; userName.value = c.store.userName }
+    // ---- v3.0.0 §23.4: Contact Mind (opt-in, default OFF). ----
+    val contactsSave = MutableStateFlow(c.store.contactsSaveEnabled)
+    val contactsCount = MutableStateFlow(0)
+    val contactsMsg = MutableStateFlow<String?>(null)
+    fun setContactsSave(on: Boolean) {
+        if (!on) {
+            com.badshah222.rani.ai.core.ContactMind(getApplication()).deleteSaved()
+            c.store.contactsSaveEnabled = false
+            contactsSave.value = false
+            contactsCount.value = 0
+            contactsMsg.value = "Saved contacts deleted from this phone."
+            return
+        }
+        c.store.contactsSaveEnabled = true
+        contactsSave.value = true
+        refreshContacts()
+    }
+    fun refreshContacts() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val n = runCatching { com.badshah222.rani.ai.core.ContactMind(getApplication()).importFromPhone() }.getOrDefault(0)
+            contactsCount.value = n
+            contactsMsg.value = if (n > 0) "$n contacts saved on this phone — never uploaded." else "No contacts found, or the contacts permission is missing."
+        }
+    }
+    fun forgetContactPrefs() {
+        val mind = com.badshah222.rani.ai.core.ContactMind(getApplication())
+        mind.preferences().keys.forEach { mind.clearPreference(it) }
+        contactsMsg.value = "Contact preferences forgotten."
+    }
+    // ---- v3.0.0 §23.5: self-uninstall switch (default OFF). ----
+    val selfUninstall = MutableStateFlow(c.store.selfUninstallEnabled)
+    fun setSelfUninstall(on: Boolean) { c.store.selfUninstallEnabled = on; selfUninstall.value = on }
+    // ---- v3.0.0 §23.6: Proactive. ----
+    val proactiveOn = MutableStateFlow(c.store.proactiveEnabled)
+    val proactiveBattery = MutableStateFlow(c.store.proactiveBattery)
+    val proactiveStorage = MutableStateFlow(c.store.proactiveStorage)
+    val proactiveReminders = MutableStateFlow(c.store.proactiveReminders)
+    val proactiveSpecialDays = MutableStateFlow(c.store.proactiveSpecialDays)
+    val proactiveHistory = MutableStateFlow<List<Triple<Long, String, String>>>(emptyList())
+    fun setProactive(on: Boolean) { c.store.proactiveEnabled = on; proactiveOn.value = on; refreshProactiveHistory() }
+    fun setProactiveBattery(on: Boolean) { c.store.proactiveBattery = on; proactiveBattery.value = on }
+    fun setProactiveStorage(on: Boolean) { c.store.proactiveStorage = on; proactiveStorage.value = on }
+    fun setProactiveReminders(on: Boolean) { c.store.proactiveReminders = on; proactiveReminders.value = on }
+    fun setProactiveSpecialDays(on: Boolean) { c.store.proactiveSpecialDays = on; proactiveSpecialDays.value = on }
+    fun refreshProactiveHistory() {
+        proactiveHistory.value = com.badshah222.rani.ai.core.ProactiveEngine(getApplication(), c.store).historyItems()
+    }
+    fun undoProactive(index: Int) {
+        viewModelScope.launch {
+            runCatching { com.badshah222.rani.ai.core.ProactiveEngine(getApplication(), c.store).undo(index) }
+            refreshProactiveHistory()
+        }
+    }
+    // ---- v3.0.0 §23.8: Screen Watch (default OFF) + never-watch list. ----
+    val screenWatch = MutableStateFlow(c.store.screenWatchEnabled)
+    fun setScreenWatch(on: Boolean) { c.store.screenWatchEnabled = on; screenWatch.value = on }
+    fun neverWatchList(): List<String> {
+        val arr = runCatching { org.json.JSONArray(c.store.screenWatchNeverJson) }.getOrNull() ?: org.json.JSONArray()
+        return (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }
+    }
+    fun addNeverWatch(pkg: String) {
+        val list = neverWatchList().toMutableSet()
+        list.add(pkg.trim())
+        c.store.screenWatchNeverJson = org.json.JSONArray(list.toList()).toString()
+    }
+    fun removeNeverWatch(pkg: String) {
+        val list = neverWatchList().toMutableSet()
+        list.remove(pkg)
+        c.store.screenWatchNeverJson = org.json.JSONArray(list.toList()).toString()
+    }
+    // ---- v3.0.0 §23.1 item 30: App Lock (SHA-256 PIN hash, never the PIN). ----
+    val appLockOn = MutableStateFlow(c.store.appLockEnabled)
+    val appLockMsg = MutableStateFlow<String?>(null)
+    fun setAppLockPin(pin: String) {
+        if (pin.length !in 4..8 || !pin.all { it.isDigit() }) { appLockMsg.value = "PIN must be 4 to 8 digits."; return }
+        val hash = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(pin.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+        c.store.appLockHash = hash
+        c.store.appLockEnabled = true
+        appLockOn.value = true
+        appLockMsg.value = "App Lock is on — RANI will ask for the PIN on start."
+    }
+    fun setAppLock(on: Boolean) {
+        if (on && c.store.appLockHash == null) { appLockMsg.value = "Set a PIN first."; return }
+        c.store.appLockEnabled = on
+        appLockOn.value = on
+    }
 
     // ---- Language (148 languages + search) ----
     val language = MutableStateFlow(c.store.language)
@@ -125,7 +218,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val m = c.ai.detectLiveModel()
                 liveModel.value = m; liveModelKey.value = c.store.liveModelKey; liveCandidates.value = c.store.liveCandidates; lastLiveError.value = c.store.lastLiveError
-                liveMsg.value = if (m != null) true to "Live ready — ${LiveModels.fromKey(c.store.liveModelKey)?.label ?: "Gemini Live"} is available." else false to "No Live voice on this key. Voice Call will run in classic mode."
+                liveMsg.value = if (m != null) true to "Live ready — ${LiveModels.fromKey(c.store.liveModelKey)?.label ?: "Gemini Live"} is available." else false to "No Live voice on this key. Live voice will run in classic mode."
             } catch (e: Exception) { liveMsg.value = false to "Live test failed. Check the internet and try again." }
             finally { liveTesting.value = false }
         }
@@ -275,6 +368,14 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
     val googleSaved by vm.googleSaved.collectAsState(); val googleVoice by vm.googleVoice.collectAsState(); val googleMsg by vm.googleMsg.collectAsState()
     val engine by vm.engine.collectAsState()
     val assistantName by vm.assistantName.collectAsState(); val petName by vm.petName.collectAsState()
+    val userName by vm.userName.collectAsState()
+    val contactsSave by vm.contactsSave.collectAsState(); val contactsCount by vm.contactsCount.collectAsState(); val contactsMsg by vm.contactsMsg.collectAsState()
+    val selfUninstall by vm.selfUninstall.collectAsState()
+    val proactiveOn by vm.proactiveOn.collectAsState(); val proactiveBattery by vm.proactiveBattery.collectAsState()
+    val proactiveStorage by vm.proactiveStorage.collectAsState(); val proactiveReminders by vm.proactiveReminders.collectAsState()
+    val proactiveSpecialDays by vm.proactiveSpecialDays.collectAsState(); val proactiveHistory by vm.proactiveHistory.collectAsState()
+    val screenWatch by vm.screenWatch.collectAsState()
+    val appLockOn by vm.appLockOn.collectAsState(); val appLockMsg by vm.appLockMsg.collectAsState()
     val awarenessOn by vm.awarenessOn.collectAsState(); val faceLockOn by vm.faceLockOn.collectAsState()
     val voicePrintGate by vm.voicePrintGate.collectAsState(); val voicePrintEnrolled by vm.voicePrintEnrolled.collectAsState()
     val facePrintEnrolled by vm.facePrintEnrolled.collectAsState(); val screenRecordingOn by vm.screenRecordingOn.collectAsState()
@@ -283,6 +384,8 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
     var emotionFamily by remember { mutableStateOf(Emotions.families.first()) }
     var nameDraft by remember(assistantName) { mutableStateOf(assistantName) }
     var petDraft by remember(petName) { mutableStateOf(petName) }
+    var userDraft by remember(userName) { mutableStateOf(userName) }
+    var pinDraft by remember { mutableStateOf("") }
     var langSearch by remember { mutableStateOf("") }
     var orbOn by remember { mutableStateOf(com.badshah222.rani.ai.core.FloatingOrbService.running) }
     var key by remember(provider) { mutableStateOf("") }; var showKey by remember { mutableStateOf(false) }
@@ -316,9 +419,10 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
             item { Section("Profile", Icons.Default.Person) {
                 Text("What should RANI call you? The pet name is used in her voice only.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 OutlinedTextField(nameDraft, { nameDraft = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Assistant name") })
+                OutlinedTextField(userDraft, { userDraft = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("Your name — what RANI calls you") })
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(petDraft, { petDraft = it }, Modifier.weight(1f), singleLine = true, label = { Text("Pet name (your name)") })
-                    Button({ vm.setAssistantName(nameDraft); vm.setPetName(petDraft) }) { Text("Save") }
+                    Button({ vm.setAssistantName(nameDraft); vm.setPetName(petDraft); vm.setUserName(userDraft) }) { Text("Save") }
                 }
             } }
 
@@ -357,8 +461,8 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
 
             // ---- Voice & model (female voices + live model) ----
             item { Section("Voice & model — Live voice", Icons.Default.RecordVoiceOver) {
-                Text("Voice Call runs on Gemini Live — Google's real human-like female voices. All voices are female, default Aoede.", style = MaterialTheme.typography.bodySmall, color = Mute)
-                Row(verticalAlignment = Alignment.CenterVertically) { Text("Use Live voice on Voice Call", Modifier.weight(1f)); Switch(liveEnabled, vm::setLiveEnabled) }
+                Text("Live voice runs on Gemini Live — Google's real human-like female voices. All voices are female, default Aoede.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Use Live voice", Modifier.weight(1f)); Switch(liveEnabled, vm::setLiveEnabled) }
                 // N-3: no model picker — the boss's order is ONLY
                 // gemini-3.8-live, one request, no ladder. A picker offering
                 // other models was decorative (the call hardcodes 3.8-live)
@@ -376,7 +480,7 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
                 lastLiveError?.let { Text("Last Live attempt failed because: $it", style = MaterialTheme.typography.bodySmall, color = Bad) }
                 Button(vm::testLive, enabled = !liveTesting) { if (liveTesting) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) else Text("Test Live voice") }
                 Msg(liveMsg)
-                Text("Open Voice Call to hear this voice — the live call uses it.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("Open Talk to RANI to hear this voice — Live uses it.", style = MaterialTheme.typography.bodySmall, color = Mute)
             } }
 
             // ---- Session (live) (Session panel + resumption ON) ----
@@ -424,7 +528,7 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
             item { Section("Stonic & Safety", Icons.Default.Security) {
                 Text("Stonic-style awareness plus RANI's own safety: voice-print, Face Lock and screen recording. Everything here is on-device — face and voice prints never leave this phone.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Awareness", Modifier.weight(1f)); Switch(awarenessOn, vm::setAwareness) }
-                Text("RANI notices which app is in front and for how long. ON by default — switch it off anytime.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("RANI notices which app is in front and for how long. The camera feed is OFF by default in v3.0.0 — she only sees the outside world when you turn Awareness ON.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Face Lock", Modifier.weight(1f)); Switch(faceLockOn, vm::setFaceLock) }
                 Text("When a different face is detected, RANI locks the phone. Face print is encrypted on this phone and never sent anywhere. OFF by default.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -452,6 +556,74 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Ask before saving", Modifier.weight(1f)); Switch(memoryAskFirst, vm::setMemoryAskFirst) }
                 Row(verticalAlignment = Alignment.CenterVertically) { Text("Sync memories to my account", Modifier.weight(1f)); Switch(memorySync, vm::setMemorySync) }
                 Text("Manage special days, favourites and everything RANI remembers on the Memory screen.", style = MaterialTheme.typography.bodySmall, color = Mute)
+            } }
+
+            // ---- v3.0.0 §23.4 Contacts & RANI's mind ----
+            item { Section("Contacts & RANI's mind", Icons.Default.Contacts) {
+                Text("When this is ON, RANI saves your contacts on this phone (encrypted) so she knows every name — exact, ambiguous and near-miss. Contacts never leave the phone and are never uploaded.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Save my contacts to RANI's mind", Modifier.weight(1f)); Switch(contactsSave, vm::setContactsSave) }
+                if (contactsSave) {
+                    Text(if (contactsCount > 0) "$contactsCount contacts saved." else "Contacts not imported yet.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(vm::refreshContacts) { Text("Refresh saved contacts") }
+                        TextButton(vm::forgetContactPrefs) { Text("Forget contact preferences") }
+                    }
+                }
+                contactsMsg?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Mute) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Let RANI uninstall herself when sad"); Text("OFF by default. When ON and she is truly sad, she shows the system uninstall dialog — Android never lets an app uninstall itself silently.", style = MaterialTheme.typography.bodySmall, color = Mute) }; Switch(selfUninstall, vm::setSelfUninstall) }
+            } }
+
+            // ---- v3.0.0 §23.6 Proactive ----
+            item { Section("Proactive — RANI acts on her own", Icons.Default.AutoAwesome) {
+                Text("When the phone needs something, RANI acts herself for safe things only. Anything sensitive always asks you first.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Proactive is ON", Modifier.weight(1f)); Switch(proactiveOn, vm::setProactive) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Battery", Modifier.weight(1f)); Switch(proactiveBattery, vm::setProactiveBattery) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Storage", Modifier.weight(1f)); Switch(proactiveStorage, vm::setProactiveStorage) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Reminders", Modifier.weight(1f)); Switch(proactiveReminders, vm::setProactiveReminders) }
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Special days", Modifier.weight(1f)); Switch(proactiveSpecialDays, vm::setProactiveSpecialDays) }
+                Text("What RANI did on her own:", style = MaterialTheme.typography.labelLarge, color = Gold)
+                if (proactiveHistory.isEmpty()) Text("Nothing yet.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                proactiveHistory.take(5).forEachIndexed { idx, item ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(item.third, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        if (item.second == "lower_brightness_night") TextButton({ vm.undoProactive(idx) }) { Text("Undo") }
+                    }
+                }
+            } }
+
+            // ---- v3.0.0 §23.8 Screen Watch ----
+            item { Section("Screen Watch", Icons.Default.Visibility) {
+                Text("When this is ON, RANI may start watching your screen any time. Android still asks you to tap the system prompt every session — silent screen capture is not possible, and RANI never captures without that tap.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("Screen Watch", Modifier.weight(1f)); Switch(screenWatch, vm::setScreenWatch) }
+                Text("While watching, you always see three signs: a green dot on the floating orb, a \"Watching screen\" pill, and a notification. Tap any of them to stop instantly. Banking apps and password screens are never readable — Android blocks capture there.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                // v3.0.0 §23.8: never-watch list — apps RANI must never
+                // watch, even if Screen Watch is on (enforced in
+                // ScreenShareService.blockedApp before consent).
+                var neverDraft by remember { mutableStateOf("") }
+                val neverList = remember(vm) { mutableStateOf(vm.neverWatchList()) }
+                Text("Never watch these apps:", style = MaterialTheme.typography.labelLarge, color = Gold)
+                neverList.value.forEach { pkg ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(pkg, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton({ vm.removeNeverWatch(pkg); neverList.value = vm.neverWatchList() }) { Text("Remove", color = Bad) }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(neverDraft, { neverDraft = it }, Modifier.weight(1f), singleLine = true, label = { Text("App package, e.g. com.bank.app") })
+                    Button({ if (neverDraft.isNotBlank()) { vm.addNeverWatch(neverDraft.trim()); neverDraft = ""; neverList.value = vm.neverWatchList() } }) { Text("Add") }
+                }
+            } }
+
+            // ---- v3.0.0 §23.1 item 30 App Lock ----
+            item { Section("App Lock", Icons.Default.Lock) {
+                Text("Ask for a PIN when RANI starts. The PIN is stored as a SHA-256 hash on this phone — never the PIN itself.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Row(verticalAlignment = Alignment.CenterVertically) { Text("App Lock", Modifier.weight(1f)); Switch(appLockOn, vm::setAppLock) }
+                OutlinedTextField(pinDraft, { pinDraft = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("New PIN (4-8 digits)") },
+                    visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button({ vm.setAppLockPin(pinDraft); pinDraft = "" }) { Text("Set PIN & turn on") }
+                }
+                appLockMsg?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Mute) }
             } }
 
             // ---- Image Studio (Gemini image + free fallback) ----
@@ -485,7 +657,7 @@ fun SettingsScreen(session: SessionViewModel, vm: SettingsViewModel, onBack: () 
 
             // ---- Look & feel ----
             item { Section("Look & feel", Icons.Default.AutoAwesome) {
-                Text("Face & logo — this is what you see on Home and in Voice Call.", style = MaterialTheme.typography.bodySmall, color = Mute)
+                Text("Face & logo — this is what you see on Home and in Live voice.", style = MaterialTheme.typography.bodySmall, color = Mute)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(avatarChoice == "girl", { vm.setAvatar("girl") }, { Text("RANI face") })
                     FilterChip(avatarChoice == "logo", { vm.setAvatar("logo") }, { Text("Crown logo") })

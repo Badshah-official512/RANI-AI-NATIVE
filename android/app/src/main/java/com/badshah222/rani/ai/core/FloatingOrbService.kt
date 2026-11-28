@@ -44,13 +44,12 @@ import kotlin.math.sin
  * and a live dot; the edge glow becomes two energy comets travelling around the
  * screen border over a soft base glow.
  *
- * v1.5.0: floating CALL CARD — while a Live call is active and the app is NOT
- * in front, this card (character, status, captions, Mute + End) floats over
- * other apps so the boss can look at something else and keep talking to RANI.
- * The orb hides while the card is up; tap the card body = back to the full
- * call screen; Mute/End act on the live call directly. FLAG_NOT_FOCUSABLE, so
- * the app underneath stays fully usable. The card never touches the mic or
- * the audio — it only reads the session state and calls setMuted()/stop().
+ * v3.0.0 §23.2 Fix 3: the floating CALL CARD is DELETED — no Mute/End
+ * surface over other apps, no card, no number. The ONLY overlay during a
+ * call is the bottom-centre dot-field orb (§20.2) + a MYRA-style speech
+ * bubble showing the latest caption (no buttons, no End). Tap the orb =
+ * back to the app (MainActivity + EXTRA_WAKE). Mute/Stop live only in the
+ * Home hero, reached by tapping the orb.
  */
 class FloatingOrbService : Service() {
     companion object {
@@ -67,12 +66,11 @@ class FloatingOrbService : Service() {
     // unused; only the service stops using it.
     private var dotField: DotFieldView? = null
     private var glow: EdgeGlowView? = null
-    // v1.5.0 — floating call window (see buildCallCard): shown only while a
-    // Live call is active AND the app is not in front.
-    private var callCard: LinearLayout? = null
-    private var callStatus: TextView? = null
-    private var callCaption: TextView? = null
-    private var callMuteBtn: Button? = null
+    // v3.0.0 §23.2 Fix 3: MYRA-style speech bubble under the dot-field orb
+    // (latest caption only — no buttons, no End) + the guardian dot that
+    // shows while screen watch is ON (§23.8).
+    private var orbBubble: TextView? = null
+    private var guardianDot: View? = null
     private var store: SecureStore? = null
     private val visHandler = Handler(Looper.getMainLooper())
     private val visLoop = object : Runnable {
@@ -90,17 +88,17 @@ class FloatingOrbService : Service() {
             // leaves the call screen.
             val fg = MainActivity.appInForeground || RaniLiveActivity.callInForeground
             val liveVoiceOn = store?.autoVoiceEnabled ?: true
-            callCard?.visibility = if (inCall && !fg) View.VISIBLE else View.GONE
-            // v1.8.0 §20.2.6 + correction: the dot circle appears under the
-            // same conditions as the old avatar (app not in front AND Live
-            // Voice ON AND overlay granted) and hides the same way (Live
-            // Voice OFF, app in front, or while the call card is up). Only
-            // the circle itself is touchable — everything outside it is
-            // transparent and pass-through; the call card stays the tap
-            // target while a call is active.
-            dotField?.visibility = if (!fg && !inCall && liveVoiceOn) View.VISIBLE else View.GONE
+            // v3.0.0 §23.2 Fix 3: the dot-field orb is the ONLY overlay —
+            // it shows whenever the app is not in front and Live Voice is
+            // ON, INCLUDING during a call (the old condition hid it in-call
+            // in favour of the deleted call card). Only the circle itself
+            // is touchable — everything outside it is transparent and
+            // pass-through.
+            dotField?.visibility = if (!fg && liveVoiceOn) View.VISIBLE else View.GONE
             glow?.visibility = if (!fg && liveVoiceOn) View.VISIBLE else View.GONE
-            if (inCall) updateCallCard()
+            updateOrbBubble(inCall && !fg)
+            // v3.0.0 §23.8: guardian dot while screen watch is running.
+            guardianDot?.visibility = if (!fg && ScreenShareService.running.value) View.VISIBLE else View.GONE
             visHandler.postDelayed(this, 600)
         }
     }
@@ -191,7 +189,6 @@ class FloatingOrbService : Service() {
             }
         }
         runCatching { wm?.addView(field, fParams) }
-        val bmp = medallionBitmap()
         // v7.3: RGB edge glow — call ke doran poori screen ke kinaron par roshni,
         // app background mein ho tab bhi rehti hai (service sirf call ke doran chalti hai)
         val gv = EdgeGlowView(this)
@@ -202,9 +199,46 @@ class FloatingOrbService : Service() {
         )
         glow = gv
         runCatching { wm?.addView(gv, gParams) }
-        // v1.5.0: floating CALL CARD — built once here, only shown by the
-        // visLoop while a Live call is active (see buildCallCard).
-        buildCallCard(bmp, type)
+        // v3.0.0 §23.2 Fix 3: MYRA-style speech bubble (caption only) above
+        // the dot-field orb, and the §23.8 guardian dot (green, top-right of
+        // the orb) while screen watch is running. No buttons anywhere.
+        val bubble = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER
+            setPadding((12 * d).toInt(), (8 * d).toInt(), (12 * d).toInt(), (8 * d).toInt())
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 14f * d
+                setColor(0xE6171130.toInt())
+                setStroke((1.5f * d).toInt(), 0xFF8B3DFF.toInt())
+            }
+            visibility = View.GONE
+        }
+        orbBubble = bubble
+        val bParams = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT, type,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL; x = 0; y = (24 * d).toInt() + diaPx + (10 * d).toInt() }
+        runCatching { wm?.addView(bubble, bParams) }
+        val gDot = View(this).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.rgb(34, 255, 170))
+                setStroke((2 * d).toInt(), Color.WHITE)
+            }
+            visibility = View.GONE
+        }
+        guardianDot = gDot
+        val gParams = WindowManager.LayoutParams(
+            (14 * d).toInt(), (14 * d).toInt(), type,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply { gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL; x = (diaPx * 0.35).toInt(); y = (24 * d).toInt() + (diaPx * 0.82).toInt() }
+        runCatching { wm?.addView(gDot, gParams) }
         running = true
         visHandler.post(visLoop)
     }
@@ -215,173 +249,31 @@ class FloatingOrbService : Service() {
         dotField?.stop()
         glow?.let { runCatching { wm?.removeView(it) } }
         dotField?.let { runCatching { wm?.removeView(it) } }
-        callCard?.let { runCatching { wm?.removeView(it) } }
+        orbBubble?.let { runCatching { wm?.removeView(it) } }
+        guardianDot?.let { runCatching { wm?.removeView(it) } }
         glow = null
-        dotField = null; callCard = null; callStatus = null; callCaption = null; callMuteBtn = null
+        dotField = null; orbBubble = null; guardianDot = null
         running = false
         super.onDestroy()
     }
 
-    /**
-     * The floating call window (v1.5.0): a small dark card over other apps —
-     * character thumb + call status, the latest caption line, and Mute + End.
-     * FLAG_NOT_FOCUSABLE so the app underneath stays fully usable; drag the
-     * card body to move it, tap the body (no drag) to reopen the full call
-     * screen. The buttons act on the live HTTP session directly.
-     */
-    private fun buildCallCard(bmp: Bitmap?, type: Int) {
-        val d = resources.displayMetrics.density
-        val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        card.background = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = 18f * d
-            setColor(0xE6171130.toInt()) // dark panel, mostly opaque
-            setStroke((1.5f * d).toInt(), 0xFF8B3DFF.toInt())
-        }
-        val pad = (12 * d).toInt()
-        card.setPadding(pad, pad, pad, pad)
-
-        // Row 1: character thumb + status lines
-        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val thumb = ImageView(this).apply {
-            setImageBitmap(bmp)
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            layoutParams = LinearLayout.LayoutParams((48 * d).toInt(), (48 * d).toInt())
-        }
-        val texts = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = (10 * d).toInt()
-            }
-        }
-        callStatus = TextView(this).apply {
-            text = "RANI is listening…"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-        val sub = TextView(this).apply {
-            text = "RANI AI · Real voice · Gemini Live"
-            setTextColor(Color.argb(200, 190, 180, 255))
-            textSize = 11f
-        }
-        texts.addView(callStatus); texts.addView(sub)
-        row1.addView(thumb); row1.addView(texts)
-        card.addView(row1)
-
-        // Caption line — what RANI just said (or what the user said).
-        callCaption = TextView(this).apply {
-            setTextColor(Color.argb(220, 220, 214, 255))
-            textSize = 12f
-            maxLines = 2
-            ellipsize = TextUtils.TruncateAt.END
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (8 * d).toInt()
-            }
-            visibility = View.GONE
-        }
-        card.addView(callCaption)
-
-        // Row 2: Mute + End (act on the live session directly).
-        val row2 = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = (10 * d).toInt()
-            }
-        }
-        callMuteBtn = Button(this).apply {
-            text = "Mute"
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 12f * d
-                setColor(0xFF2A2145.toInt())
-            }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener {
-                // v1.7.0: Mute goes through LiveState + the page (window.setRaniMuted).
-                val next = !LiveState.muted.value
-                LiveState.setMuted(next)
-                sendBroadcast(Intent(RaniLiveActivity.ACTION_SET_LIVE_MUTED).putExtra(RaniLiveActivity.EXTRA_MUTED, next))
-            }
-        }
-        val endBtn = Button(this).apply {
-            text = "End"
-            isAllCaps = false
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 12f * d
-                setColor(0xFFD92D20.toInt())
-            }
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = (8 * d).toInt()
-            }
-            setOnClickListener {
-                LiveState.onEnded()
-                sendBroadcast(Intent(RaniLiveActivity.ACTION_END_LIVE))
-            }
-        }
-        row2.addView(callMuteBtn); row2.addView(endBtn)
-        card.addView(row2)
-
-        // Drag anywhere on the card body; tap (no drag) reopens the full call screen.
-        val params = WindowManager.LayoutParams(
-            (300 * d).toInt(), WindowManager.LayoutParams.WRAP_CONTENT, type,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; x = 0; y = (54 * d).toInt() }
-        var downX = 0; var downY = 0; var startX = 0; var startY = 0; var downAt = 0L
-        card.setOnTouchListener { v, e ->
-            when (e.action) {
-                MotionEvent.ACTION_DOWN -> { downX = e.rawX.toInt(); downY = e.rawY.toInt(); startX = params.x; startY = params.y; downAt = System.currentTimeMillis(); true }
-                MotionEvent.ACTION_MOVE -> {
-                    params.x = startX + (e.rawX.toInt() - downX); params.y = startY + (e.rawY.toInt() - downY)
-                    runCatching { wm?.updateViewLayout(v, params) }; true
-                }
-                MotionEvent.ACTION_UP -> {
-                    val moved = Math.abs(e.rawX.toInt() - downX) + Math.abs(e.rawY.toInt() - downY)
-                    if (moved < 12) {
-                        val i = Intent(this, MainActivity::class.java)
-                            .putExtra("EXTRA_WAKE", "1")
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        startActivity(i)
-                    }
-                    true
-                }
-                else -> false
-            }
-        }
-        callCard = card
-        card.visibility = View.GONE
-        runCatching { wm?.addView(card, params) }
-    }
-
-    /** Refresh the call card's status, caption and Mute label from LiveState (§19.3.3). */
-    private fun updateCallCard() {
-        callStatus?.text = when (LiveState.state.value) {
-            "connecting" -> "Connecting…"
-            "listening" -> "RANI is listening…"
-            "thinking" -> "RANI is thinking…"
-            "speaking" -> "RANI is speaking…"
-            "error", "ended" -> "Call ended"
-            else -> "RANI is ready"
-        }
+    /** v3.0.0 §23.2 Fix 3 (MYRA OrbBubble): the speech bubble next to the
+     *  orb shows the latest caption (max ~260 chars, masked by LiveState —
+     *  never a phone number), with no buttons and no status line. Visible
+     *  only while a call is live and the app is not in front. */
+    private fun updateOrbBubble(show: Boolean) {
+        val b = orbBubble ?: return
+        if (!show) { if (b.visibility != View.GONE) b.visibility = View.GONE; return }
         val cap = LiveState.caption.value
         val who = LiveState.captionWho.value
         val text = when {
             cap.isEmpty() -> ""
             who.isEmpty() -> cap
             else -> "$who: $cap"
-        }
-        callCaption?.let {
-            it.text = text
-            it.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
-        }
-        callMuteBtn?.text = if (LiveState.muted.value) "Unmute" else "Mute"
+        }.take(260)
+        if (text.isEmpty()) { b.visibility = View.GONE; return }
+        if (b.text.toString() != text) b.text = text
+        if (b.visibility != View.VISIBLE) b.visibility = View.VISIBLE
     }
 }
 

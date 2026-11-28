@@ -76,7 +76,7 @@ fun VoiceModeScreen(home: HomeViewModel, settings: SettingsViewModel, onBack: ()
                         // shows what the key offers (detected, 3.8 first).
                         Text("Live model: Gemini 3.8 Live only", style = MaterialTheme.typography.titleMedium, color = Gold)
                         Text("Session (live)", style = MaterialTheme.typography.titleMedium, color = Gold)
-                        Row(verticalAlignment = Alignment.CenterVertically) { Text("Use Live voice on Voice Call", Modifier.weight(1f)); Switch(liveEnabled, settings::setLiveEnabled) }
+                        Row(verticalAlignment = Alignment.CenterVertically) { Text("Use Live voice", Modifier.weight(1f)); Switch(liveEnabled, settings::setLiveEnabled) }
                         Text("Live model: ${liveModel ?: "not confirmed yet"}", style = MaterialTheme.typography.bodySmall, color = if (liveModel != null) Ok else Mute)
                         Text("Session resumption is ON — if a call drops, RANI resumes from the same point.", style = MaterialTheme.typography.bodySmall, color = Mute)
                         if (liveCandidates.isNotEmpty()) Text("Tried models: ${liveCandidates.split(",").joinToString(", ")}", style = MaterialTheme.typography.bodySmall, color = Mute)

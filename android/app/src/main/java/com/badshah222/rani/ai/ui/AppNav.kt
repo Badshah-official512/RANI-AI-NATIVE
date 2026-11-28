@@ -1,12 +1,12 @@
 package com.badshah222.rani.ai.ui
 
 import android.app.Activity
-import androidx.compose.foundation.background // FIX (CI run #46): missing import — .background() used in InAppCallBar (line 221)
-import androidx.compose.foundation.border // FIX (CI run #46): missing import — .border() used in InAppCallBar (line 222); added now to pre-empt the next error in the same chain
+import androidx.compose.foundation.background // FIX (CI run #46): missing import — .background() used in InAppLiveBar (line 221)
+import androidx.compose.foundation.border // FIX (CI run #46): missing import — .border() used in InAppLiveBar (line 222); added now to pre-empt the next error in the same chain
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.draw.clip // FIX (CI run #45): missing import — .clip() used in InAppCallBar
+import androidx.compose.ui.draw.clip // FIX (CI run #45): missing import — .clip() used in InAppLiveBar
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,6 +47,26 @@ import com.badshah222.rani.ai.features.recordings.RecordingsScreen
 import com.badshah222.rani.ai.features.search.WebSearchScreen
 import com.badshah222.rani.ai.features.search.WebSearchViewModel
 import com.badshah222.rani.ai.features.tools.AiToolsScreen
+import com.badshah222.rani.ai.features.tools.BriefingScreen
+import com.badshah222.rani.ai.features.tools.CallLogsScreen
+import com.badshah222.rani.ai.features.tools.CvScreen
+import com.badshah222.rani.ai.features.tools.DostScreen
+import com.badshah222.rani.ai.features.tools.FocusScreen
+import com.badshah222.rani.ai.features.tools.FreeToolsHubScreen
+import com.badshah222.rani.ai.features.tools.FreeToolsViewModel
+import com.badshah222.rani.ai.features.tools.FunBoxScreen
+import com.badshah222.rani.ai.features.tools.HisaabScreen
+import com.badshah222.rani.ai.features.tools.LyricsScreen
+import com.badshah222.rani.ai.features.tools.MaloomatScreen
+import com.badshah222.rani.ai.features.tools.ModesScreen
+import com.badshah222.rani.ai.features.tools.NamazScreen
+import com.badshah222.rani.ai.features.tools.NewsScreen
+import com.badshah222.rani.ai.features.tools.PinScreen
+import com.badshah222.rani.ai.features.tools.RemindersScreen
+import com.badshah222.rani.ai.features.tools.ShortenerScreen
+import com.badshah222.rani.ai.features.tools.TikTokScreen
+import com.badshah222.rani.ai.features.tools.VoiceStudioScreen
+import com.badshah222.rani.ai.features.tools.WeatherScreen
 import com.badshah222.rani.ai.features.tools.AiToolsViewModel
 import com.badshah222.rani.ai.features.visualhub.VisualHubScreen
 import com.badshah222.rani.ai.features.visualhub.VisualHubViewModel
@@ -66,7 +86,6 @@ import com.badshah222.rani.ai.features.chat.HistoryViewModel
 import com.badshah222.rani.ai.features.chat.SecretChatScreen
 import com.badshah222.rani.ai.features.chat.SecretChatViewModel
 import com.badshah222.rani.ai.features.help.HelpScreen
-import com.badshah222.rani.ai.features.help.HelpViewModel
 import com.badshah222.rani.ai.features.home.HomeScreen
 import com.badshah222.rani.ai.features.home.HomeViewModel
 import com.badshah222.rani.ai.features.home.QuickActionsScreen
@@ -112,8 +131,9 @@ private fun SignedInNav(session: SessionViewModel) {
         }
     }
     // ViewModels are created here (nav-graph scope) so Home state survives opening Settings/Help.
-    val home: HomeViewModel = viewModel(); val settings: SettingsViewModel = viewModel(); val help: HelpViewModel = viewModel(); val history: HistoryViewModel = viewModel(); val browser: BrowserViewModel = viewModel(); val screen: ScreenViewModel = viewModel(); val secret: SecretChatViewModel = viewModel(); val contacts: ContactsViewModel = viewModel()
+    val home: HomeViewModel = viewModel(); val settings: SettingsViewModel = viewModel(); val history: HistoryViewModel = viewModel(); val browser: BrowserViewModel = viewModel(); val screen: ScreenViewModel = viewModel(); val secret: SecretChatViewModel = viewModel(); val contacts: ContactsViewModel = viewModel()
     val tools: AiToolsViewModel = viewModel(); val webforge: WebForgeViewModel = viewModel(); val coder: CoderViewModel = viewModel()
+    val freetools: FreeToolsViewModel = viewModel()
     val files: FilesViewModel = viewModel(); val media: MediaViewModel = viewModel(); val search: WebSearchViewModel = viewModel()
     val monitor: SystemMonitorViewModel = viewModel(); val automation: AutomationViewModel = viewModel(); val memory: MemoryViewModel = viewModel()
     val world: YourWorldViewModel = viewModel(); val visualhub: VisualHubViewModel = viewModel()
@@ -133,9 +153,10 @@ private fun SignedInNav(session: SessionViewModel) {
 
     Scaffold(containerColor = Ink) { pad ->
         Box(Modifier.padding(pad)) {
-            // v1.9.0 §21.4 — in-app call bar: while a call is live and the
-            // user is on any screen other than Home, a slim bar sits above
-            // the NavHost (status + latest caption + End). Tapping the bar
+            // v3.0.0 §23.2 Fix 4 — in-app LIVE bar: while a call is live and
+            // the user is on any screen other than Home, a slim dot + status
+            // + caption strip sits above the NavHost. NO End button (the
+            // hero pill + dot-field carry the state). Tapping the bar
             // returns to Home, where the hero slot shows the same call.
             val liveActive by LiveState.active.collectAsState()
             val liveState by LiveState.state.collectAsState()
@@ -144,24 +165,39 @@ private fun SignedInNav(session: SessionViewModel) {
             val route = currentEntry?.destination?.route
             Column(Modifier.fillMaxSize()) {
                 if (liveActive && route != "home" && route != "onboarding") {
-                    InAppCallBar(
+                    InAppLiveBar(
                         status = when (liveState) {
                             "speaking" -> "RANI is speaking"
                             "listening" -> "RANI is listening"
                             "thinking" -> "RANI is thinking"
                             "connecting" -> "Connecting…"
-                            else -> "RANI is on the call"
+                            else -> "RANI is listening"
                         },
                         caption = liveCaption,
                         onTap = { nav.navigate("home") { launchSingleTop = true } },
-                        onEnd = { home.stopLiveSession() },
                     )
+                }
+                // v3.0.0 §23.1 item 5: the Live page asked to start screen
+                // sharing — open the Screen Share screen (system consent).
+                val screenReq by LiveState.screenShareRequested.collectAsState()
+                LaunchedEffect(screenReq) {
+                    if (screenReq) {
+                        LiveState.screenShareRequested.value = false
+                        nav.navigate("screen")
+                    }
                 }
                 Box(Modifier.weight(1f)) {
             // v1.8.0 §20.3: signed-in + onboarding not done → the onboarding
             // runs first (one question per screen); otherwise Home.
             val appCtx = LocalContext.current.applicationContext
             val store = remember { (appCtx as RaniApp).container.store }
+            // v3.0.0 §23.1 item 30: App Lock — when ON, the PIN screen
+            // shows FIRST (in-memory unlock flag; the PIN itself is never
+            // stored, only its SHA-256 hash).
+            var unlocked by remember { mutableStateOf(false) }
+            if (store.appLockEnabled && !unlocked) {
+                PinScreen { unlocked = true }
+            } else {
             NavHost(nav, startDestination = if (store.onboardingDone) "home" else "onboarding") {
                 composable("onboarding") {
                     OnboardingScreen(onDone = {
@@ -177,7 +213,7 @@ private fun SignedInNav(session: SessionViewModel) {
                 composable("screen") { ScreenShareScreen(screen) { nav.popBackStack() } }
                 composable("secret") { SecretChatScreen(secret, { nav.popBackStack() }, { nav.navigate(it) }) }
                 composable("settings") { SettingsScreen(session, settings, { nav.popBackStack() }, { nav.navigate("permissions") }, { nav.navigate("onboarding") }) }
-                composable("help") { HelpScreen(help) { nav.popBackStack() } }
+                composable("help") { HelpScreen { nav.popBackStack() } }
                 composable("about") { AboutScreen { nav.popBackStack() } }
                 composable("history") { ChatHistoryScreen(home, history) { nav.popBackStack() } }
                 composable("contacts") { ContactsScreen(contacts) { nav.popBackStack() } }
@@ -201,7 +237,27 @@ private fun SignedInNav(session: SessionViewModel) {
                     }
                 }
                 composable("recordings") { RecordingsScreen { nav.popBackStack() } }
+                // v3.0.0 §23.1 P2 — free-tools suite.
+                composable("freetools") { FreeToolsHubScreen(freetools, { nav.popBackStack() }) { nav.navigate(it) } }
+                composable("weather") { WeatherScreen(freetools) { nav.popBackStack() } }
+                composable("news") { NewsScreen(freetools) { nav.popBackStack() } }
+                composable("namaz") { NamazScreen(freetools) { nav.popBackStack() } }
+                composable("focus") { FocusScreen(freetools) { nav.popBackStack() } }
+                composable("modes") { ModesScreen(freetools, home, { nav.popBackStack() }) { nav.navigate(it) } }
+                composable("briefing") { BriefingScreen(freetools) { nav.popBackStack() } }
+                composable("calllogs") { CallLogsScreen(freetools) { nav.popBackStack() } }
+                composable("reminders") { RemindersScreen(freetools) { nav.popBackStack() } }
+                composable("hisaab") { HisaabScreen(freetools) { nav.popBackStack() } }
+                composable("tiktok") { TikTokScreen(freetools) { nav.popBackStack() } }
+                composable("lyrics") { LyricsScreen(freetools) { nav.popBackStack() } }
+                composable("maloomat") { MaloomatScreen(freetools) { nav.popBackStack() } }
+                composable("funbox") { FunBoxScreen(freetools) { nav.popBackStack() } }
+                composable("shortener") { ShortenerScreen(freetools) { nav.popBackStack() } }
+                composable("cv") { CvScreen(freetools) { nav.popBackStack() } }
+                composable("voicestudio") { VoiceStudioScreen(freetools, { nav.popBackStack() }) { nav.navigate(it) } }
+                composable("dost") { DostScreen(freetools) { nav.popBackStack() } }
             }
+            } // else — App Lock gate
                 } // Box(weight(1f)) — NavHost
             } // Column — call bar + NavHost
         }
@@ -209,12 +265,14 @@ private fun SignedInNav(session: SessionViewModel) {
 }
 
 /**
- * v1.9.0 §21.4 — slim in-app call bar above the NavHost. Stonic styling
- * (dark panel, violet stroke), English only, 44 dp touch targets. The
- * user's proof, on every screen, that the call is still alive.
+ * v3.0.0 §23.2 Fix 4 — slim in-app LIVE bar above the NavHost (renamed
+ * from InAppCallBar to InAppLiveBar). Stonic styling (dark panel, violet
+ * stroke), English only, 44 dp touch targets. Dot + status + caption only
+ * — no End button, no "on the call" wording. The user's proof, on every
+ * screen, that the Live session is still alive.
  */
 @Composable
-private fun InAppCallBar(status: String, caption: String, onTap: () -> Unit, onEnd: () -> Unit) {
+private fun InAppLiveBar(status: String, caption: String, onTap: () -> Unit) {
     Row(
         Modifier.fillMaxWidth()
             .clickable { onTap() }
@@ -239,10 +297,5 @@ private fun InAppCallBar(status: String, caption: String, onTap: () -> Unit, onE
         } else {
             Spacer(Modifier.weight(1f))
         }
-        Button(
-            onEnd, Modifier.height(36.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color(0xFFD92D20), contentColor = androidx.compose.ui.graphics.Color.White),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
-        ) { Text("End") }
     }
 }

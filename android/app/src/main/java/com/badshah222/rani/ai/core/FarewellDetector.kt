@@ -19,7 +19,7 @@ package com.badshah222.rani.ai.core
 object FarewellDetector {
     private val phrases = listOf(
         "good night", "allah hafiz", "khuda hafiz", "goodbye", "chalo bye",
-        "cut kardo", "bas kardo", "khatam karo", "band karo", "thats enough",
+        "cut kardo", "bas kardo", "bas hogaya", "bas ho gaya", "khatam karo", "band karo", "thats enough",
         "stop now", "end the call", "bas ab", "bye",
         "شب بخیر", "اللہ حافظ", "خدا حافظ",
     )
@@ -94,6 +94,13 @@ object FarewellDetector {
         if (prevTurnHadFarewell) return phrase
         return null
     }
+
+    /** v3.0.0 §23.3: phrases that mean "enough for now" — she ends the
+     *  call AND turns the top-bar Live option OFF herself (unlike "good
+     *  night", which ends the call but leaves Live ON). */
+    private val turnOffPhrases = listOf("bas hogaya", "bas ho gaya", "bas ab", "thats enough", "stop now")
+    fun isTurnOffPhrase(phrase: String?): Boolean =
+        phrase != null && turnOffPhrases.any { phrase.contains(it) }
 
     /** Loose check for the assistant's goodbye acknowledgement ("good
      *  night, Babu Jaan, sleep well…") — used by the native safety net to

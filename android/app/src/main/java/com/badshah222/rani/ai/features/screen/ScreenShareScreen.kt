@@ -102,6 +102,7 @@ fun ScreenShareScreen(vm: ScreenViewModel, onBack: () -> Unit) {
     val auto by vm.auto.collectAsState()
     var question by remember { mutableStateOf("") }
 
+    var blockedMsg by remember { mutableStateOf<String?>(null) }
     val mpm = remember { ctx.getSystemService(MediaProjectionManager::class.java) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK && res.data != null) {
@@ -119,7 +120,8 @@ fun ScreenShareScreen(vm: ScreenViewModel, onBack: () -> Unit) {
             Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(14.dp)) {
                 Text(
                     "🔒 Privacy: the screen is only visible when YOU press Start and give Android permission. " +
-                        "While sharing is on, a notification stays at the top. The moment you press Stop, everything stops — nothing is secretly recorded.",
+                        "While sharing is on, a notification stays at the top. The moment you press Stop, everything stops — nothing is secretly recorded. " +
+                        "Banking apps and password screens show as black — Android blocks capture there (FLAG_SECURE), and RANI tells you she cannot see them instead of guessing.",
                     Modifier.padding(12.dp), color = Mute, style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -136,11 +138,18 @@ fun ScreenShareScreen(vm: ScreenViewModel, onBack: () -> Unit) {
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (!sharing) {
-                    Button({ launcher.launch(mpm.createScreenCaptureIntent()) }, shape = RoundedCornerShape(14.dp)) { Text("▶ Share My Screen") }
+                    Button({
+                        // v3.0.0 §23.8: never-watch list is enforced BEFORE
+                        // the system consent dialog — a listed app never
+                        // starts a watch, even by accident.
+                        val blocked = ScreenShareService.blockedApp(ctx)
+                        if (blocked != null) blockedMsg = "$blocked is on your never-watch list — RANI will not watch it. Remove it from Settings → Screen Watch to allow it."
+                        else { blockedMsg = null; launcher.launch(mpm.createScreenCaptureIntent()) }
+                    }, shape = RoundedCornerShape(14.dp)) { Text("▶ Share My Screen") }
                 } else {
                     Button({ ScreenShareService.stop(ctx); vm.stopSpeaking() }, shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Bad)) { Text("■ Stop sharing") }
-                    FilterChip(auto, { vm.auto.value = !auto }, { Text("Auto samjhao") })
+                    FilterChip(auto, { vm.auto.value = !auto }, { Text("Auto explain") })
                 }
             }
             if (sharing) {
@@ -153,9 +162,10 @@ fun ScreenShareScreen(vm: ScreenViewModel, onBack: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(question, { question = it }, Modifier.weight(1f), singleLine = true,
                         placeholder = { Text("Write your question…") }, shape = RoundedCornerShape(14.dp))
-                    Button({ if (question.isNotBlank()) { vm.ask(question); question = "" } }, shape = RoundedCornerShape(14.dp)) { Text("Poochho") }
+                    Button({ if (question.isNotBlank()) { vm.ask(question); question = "" } }, shape = RoundedCornerShape(14.dp)) { Text("Ask") }
                 }
             }
+            blockedMsg?.let { Text(it, color = Bad, style = MaterialTheme.typography.bodySmall) }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Violet)
             if (answer != null) {
                 Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp)) {

@@ -1,5 +1,14 @@
 package com.badshah222.rani.ai.features.home
 
+/**
+ * v3.0.0 §23.2 Fix 6 — QUARANTINED / DEAD. Zero launch sites since v2.0.0;
+ * the persistent CallEngine (MainActivity holder) owns every Live call.
+ * The manifest declaration is removed. The class stays ONLY because its
+ * ACTION_SET_LIVE_MUTED / ACTION_END_LIVE broadcast constants are still
+ * referenced by the hero path. Do NOT relaunch it, do NOT "fix" its UI —
+ * it is not reachable.
+ */
+
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
@@ -170,7 +179,7 @@ class RaniLiveActivity : ComponentActivity() {
         val key = intent.getStringExtra(EXTRA_KEY) ?: ""
         val voice = intent.getStringExtra(EXTRA_VOICE) ?: "Aoede"
         val model = intent.getStringExtra(EXTRA_MODEL) ?: "gemini-3.8-live"
-        val ver = intent.getStringExtra(EXTRA_VER) ?: "2.0.0"
+        val ver = intent.getStringExtra(EXTRA_VER) ?: "3.0.0"
         liveUrl = "$LIVE_URL?key=" + URLEncoder.encode(key, "UTF-8") +
             "&voice=" + URLEncoder.encode(voice, "UTF-8") +
             "&model=" + URLEncoder.encode(model, "UTF-8") +

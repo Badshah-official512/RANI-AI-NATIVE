@@ -30,6 +30,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.badshah222.rani.ai.RaniApp
 import com.badshah222.rani.ai.core.AppResolver
+import com.badshah222.rani.ai.core.ContactMind
 import com.badshah222.rani.ai.core.RaniAccessibilityService
 import com.badshah222.rani.ai.core.SecureStore
 import com.badshah222.rani.ai.data.ai.Pollinations
@@ -48,7 +49,9 @@ import java.io.File
 import java.net.URLEncoder
 
 /**
- * v2.0.0 §22.4 — the Skills screen: 65 real skills across 12 categories.
+ * v3.0.0 — the Skills screen: 66 real skills across 12 categories
+ *  (65 in v2.0.0 + Turn the Torch On/Off, §23.1 P0 — see RaniTools.kt:
+ *  53 direct Skill( entries + 7 fromTool( + 6 fromRoutine( = 66).
  *
  * Same dark panels, violet stroke, Four Core Circuits language as the rest
  * of the app. Categories are SECTIONS with headers (name + count) in one
@@ -58,11 +61,11 @@ import java.net.URLEncoder
  * Tapping a skill opens the existing ask-flow: the English ask-prompt as
  * the field label, "Type here…" placeholder, "Run" button, result below.
  * Search box on top filters cards by name + category + description.
- * The total ("65 skills") is computed from the catalog at runtime, never
+ * The total ("66 skills") is computed from the catalog at runtime, never
  * hardcoded. The original 8 tools keep their exact templates and
  * handlers — only their UI strings changed to English; Analyze File
  * stays as its own file-picker section below the catalog (it is not a
- * skill card, so the runtime total stays exactly 65).
+ * skill card, so the runtime total stays exactly 66).
  *
  * Generate Image uses the Gemini image model (Pollinations free URL as fallback);
  * Create PDF writes a real PDF to Downloads; Analyze File reads one of RANI's
@@ -120,6 +123,25 @@ class AiToolsViewModel(app: Application) : AndroidViewModel(app) {
                         if (lines.isNotEmpty()) saveTasks(lines)
                         result.value = reply.text + if (lines.isNotEmpty()) "\n\nSaved to your to-do list." else ""
                     }
+                    "set_torch" -> result.value = nativeSetTorch(x)
+                    "weather_today" -> {
+                        val j = c.worker.tool("weather?city=${java.net.URLEncoder.encode(x.ifBlank { c.store.namazCity }, "UTF-8")}")
+                        result.value = if (j == null) "Weather is not available right now — please try again in a bit."
+                        else {
+                            val cur = j.optJSONObject("current") ?: j
+                            "Weather in ${x.ifBlank { c.store.namazCity }}: ${cur.optString("tempC")}°C, ${cur.optString("desc")} (feels like ${cur.optString("feelsC")}°C, humidity ${cur.optString("humidity")}%, wind ${cur.optString("windKmph")} km/h)"
+                        }
+                    }
+                    "tell_joke" -> {
+                        val j = runCatching { c.worker.tool("joke") }.getOrNull()
+                        // N4 fix: the Worker joke source returns a category —
+                        // Dark/Spooky jokes are NOT clean. A dark joke falls
+                        // through to the chat clean-joke fallback below.
+                        val cat = j?.optString("category").orEmpty()
+                        val dark = cat.equals("Dark", ignoreCase = true) || cat.equals("Spooky", ignoreCase = true)
+                        val joke = if (dark) null else j?.optString("joke")?.takeIf { it.isNotBlank() } ?: j?.optString("text")?.takeIf { it.isNotBlank() }
+                        result.value = joke ?: c.ai.chat(listOf(ChatMessage("user", "Tell me a short, clean joke about: ${x.ifBlank { "everyday life" }}"))).text
+                    }
                     "open_app" -> result.value = nativeOpenApp(x)
                     "call_contact" -> result.value = nativeCallContact(x)
                     "set_alarm" -> result.value = nativeSetAlarm(x)
@@ -153,6 +175,25 @@ class AiToolsViewModel(app: Application) : AndroidViewModel(app) {
             catch (e: Exception) { error.value = "Something went wrong: ${e.message?.take(120)}" }
             finally { busy.value = false }
         }
+    }
+
+    /** v3.0.0 §23.1 P0: torch via CameraManager (same call the Live
+     *  bridge uses). "on"/"off" (or "khol"/"band") — anything else asks. */
+    private fun nativeSetTorch(input: String): String {
+        val low = input.lowercase()
+        val on = when {
+            low.contains("on") || low.contains("khol") || low.contains("chal") -> true
+            low.contains("off") || low.contains("band") -> false
+            else -> return "Torch on or off? Say 'torch on' or 'torch off'."
+        }
+        return try {
+            val ctx = getApplication<Application>()
+            val cm = ctx.getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+            val id = cm.cameraIdList.firstOrNull { cm.getCameraCharacteristics(it).get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }
+                ?: return "This phone has no flashlight."
+            cm.setTorchMode(id, on)
+            if (on) "Torch is on." else "Torch is off."
+        } catch (e: Exception) { "Could not change the torch: ${e.message?.take(100)}" }
     }
 
     /** v2.0.0 §22.4: routine skills run the REAL routine mechanism — the
@@ -202,39 +243,44 @@ class AiToolsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Resolves a contact name (or digits) to a number — mirrors
-     *  RaniLiveBridge.resolveNumber. Returns "multiple:Name1, Name2" on
-     *  a tie so RANI asks which one. Contacts stay on-device. */
-    private fun resolveNumber(target: String): String {
-        val t = target.trim()
-        if (t.isEmpty()) return "fail"
-        if (t.matches(Regex("^[+]?[0-9][0-9 \\-]{5,}$"))) return t.replace(" ", "").replace("-", "")
-        if (!ContactsHelper.hasPermission(appCtx())) return "nocontacts"
-        val all = runCatching { ContactsHelper.loadAll(appCtx()) }.getOrDefault(emptyList())
-        val exact = all.filter { it.name.equals(t, ignoreCase = true) }
-        if (exact.size > 1) {
-            val names = exact.map { it.name }.distinct().take(3)
-            if (names.size > 1) return "multiple:" + names.joinToString(", ")
-        }
-        val entry = runCatching { ContactsHelper.findBest(appCtx(), t) }.getOrNull() ?: return "notfound"
-        return runCatching { ContactsHelper.bestNumber(entry) }.getOrNull() ?: "notfound"
-    }
+    /** Resolves a contact name (or digits) to a number — FIX-2 delegates
+     *  to the single ContactMind.resolveToNumber() (pick path, number
+     *  pick, exact / ambiguous / near-miss, save-ON and save-OFF), so
+     *  this card can never drift from the bridge or chat again. In
+     *  save-OFF mode the old code collapsed distinct() names first, so
+     *  3 contacts all named "Ami" looked like one and silently dialled
+     *  the first — the shared resolver counts exact matches instead.
+     *  Returns "multiple:…", "multiple_number:…" (labelled options, never
+     *  raw digits) or "nearmiss:…" (+ "|whatsapp") so the caller asks
+     *  instead of dialling. Contacts stay on-device. */
+    private fun resolveNumber(target: String): String =
+        ContactMind(appCtx()).resolveToNumber(target)
 
     private fun multipleOrStatus(num: String, contact: String): String? = when {
         num == "notfound" -> "I could not find a contact called $contact."
+        // FIX-3 item 4: save-OFF + genuinely not found — the honest line
+        // (§23.4 item 1): nothing is saved, and how to turn the save on.
+        num == "notfound_nosave" -> "I have not saved your contacts - turn on 'Save my contacts to RANI's mind' in Settings so I can find names like that. Or say the phone number instead."
         num == "nocontacts" -> "I need permission to read contacts to find that person by name."
         num.startsWith("multiple:") -> "Which one did you mean — ${num.removePrefix("multiple:").replace(Regex(", ([^,]+)$"), " or $1")}?"
+        num.startsWith("multiple_number:") -> "Which number for $contact — ${num.removePrefix("multiple_number:").replace(Regex(", ([^,]+)$"), " or $1")}?"
+        num.startsWith("nearmiss:") -> run {
+            val parts = num.removePrefix("nearmiss:").split("|")
+            val where = if (parts.getOrNull(1) == "whatsapp") "contacts or WhatsApp" else "contacts"
+            "$contact is not in your $where, but ${parts[0]} is — shall I use ${parts[0]}? Reply yes to use it."
+        }
         num == "fail" -> "I could not understand that contact."
         else -> null
     }
 
+    // v3.0.0 §23.2 Fix 1: NEVER auto-dial — ACTION_DIAL only opens the
+    // dialer with the number filled in; the user presses Call himself.
     private fun nativeCallContact(name: String): String {
         val num = resolveNumber(name)
         multipleOrStatus(num, name)?.let { return it }
         return try {
-            if (launchIntent(Intent(Intent.ACTION_CALL, Uri.parse("tel:" + Uri.encode(num))))) "Calling $name now." else "I could not call $name."
-        } catch (e: SecurityException) { "I need the call permission to call $name." }
-        catch (e: Exception) { "I could not call $name." }
+            if (launchIntent(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(num))))) "Dialer opened for $name — press Call to connect." else "I could not open the dialer for $name."
+        } catch (e: Exception) { "I could not open the dialer for $name." }
     }
 
     /** Parses "6", "6:30", "6 am", "6:30 pm" -> (hour24, minute) or null. */
@@ -644,7 +690,7 @@ fun AiToolsScreen(vm: AiToolsViewModel, onBack: () -> Unit) {
                 }
             }
             // Analyze File — the 8th original tool. It is NOT a skill card
-            // (the runtime total stays exactly the 65 skills above); it
+            // (the runtime total stays exactly the 66 skills above); it
             // keeps its own file-picker flow here.
             item {
                 Text("Analyze a File", style = MaterialTheme.typography.titleMedium, color = Gold, modifier = Modifier.padding(top = 8.dp))

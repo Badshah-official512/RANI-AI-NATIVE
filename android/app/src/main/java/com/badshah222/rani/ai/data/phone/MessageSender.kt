@@ -3,6 +3,7 @@ package com.badshah222.rani.ai.data.phone
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import com.badshah222.rani.ai.core.ContactMind
 import com.badshah222.rani.ai.core.RaniAccessibilityService
 import kotlinx.coroutines.delay
 import java.net.URLEncoder
@@ -26,27 +27,53 @@ object MessageSender {
 
     suspend fun send(ctx: Context, channel: String, target: String, message: String): SendOutcome {
         val svc = RaniAccessibilityService.instance
-            ?: return if (RaniAccessibilityService.isEnabled(ctx)) SendOutcome.Failed("Accessibility service abhi start nahi hui — ek dafa Settings se dobara ON karo, Babu Jaan.")
+            ?: return if (RaniAccessibilityService.isEnabled(ctx)) SendOutcome.Failed("The accessibility service has not started yet — please turn RANI AI on again from Settings > Accessibility.")
             else SendOutcome.NeedsAccessibility
         // ---- resolve the number (on-device only) ----
-        val digitsOnly = target.matches(Regex("^[+]?[0-9][0-9 \\-]{5,}$"))
-        val entry = if (digitsOnly) null else ContactsHelper.findBest(ctx, target)
-        if (!digitsOnly && entry == null) {
-            return if (!ContactsHelper.hasPermission(ctx)) SendOutcome.NeedsContactsPermission
-            else SendOutcome.Failed("\"$target\" contacts mein nahi mila, Babu Jaan — naam dobara bolo ya number batao.")
+        // FIX-3: through the single ContactMind resolver — the old code
+        // used findBest/bestNumber with no ambiguity check and actually
+        // SENT to the first match. An ambiguous name, a multi-number
+        // contact or a near-miss now returns the ask string instead of a
+        // number, and nothing is sent until the user picks. Digits pass
+        // through unchanged.
+        val resolved = ContactMind(ctx).resolveToNumber(target)
+        if (resolved == "nocontacts") return SendOutcome.NeedsContactsPermission
+        if (resolved == "notfound") {
+            return SendOutcome.Failed("I could not find \"$target\" in your contacts — please say the name again or tell me the number.")
         }
-        val rawNumber = if (digitsOnly) target.replace(" ", "").replace("-", "") else ContactsHelper.bestNumber(entry!!)!!
-        val name = entry?.name ?: rawNumber
+        // FIX-3 item 4: save-OFF + genuinely not found — the honest line
+        // (§23.4 item 1): nothing is saved, and how to turn the save on.
+        if (resolved == "notfound_nosave") {
+            return SendOutcome.Failed("I have not saved your contacts - turn on 'Save my contacts to RANI's mind' in Settings so I can find names like that. Or say the phone number instead.")
+        }
+        if (resolved == "fail") {
+            return SendOutcome.Failed("I could not understand that contact — please say the name again or tell me the number.")
+        }
+        if (resolved.startsWith("multiple:")) {
+            val opts = resolved.removePrefix("multiple:").replace(Regex(", ([^,]+)$"), " or $1")
+            return SendOutcome.Failed("Which $target do you mean — $opts? Tell me the option, like \"$target option 2\".")
+        }
+        if (resolved.startsWith("multiple_number:")) {
+            val opts = resolved.removePrefix("multiple_number:").replace(Regex(", ([^,]+)$"), " or $1")
+            return SendOutcome.Failed("Which number for $target — $opts? Tell me, like \"$target mobile\".")
+        }
+        if (resolved.startsWith("nearmiss:")) {
+            val parts = resolved.removePrefix("nearmiss:").split("|")
+            val where = if (parts.getOrNull(1) == "whatsapp") "contacts or WhatsApp" else "contacts"
+            return SendOutcome.Failed("$target is not in your $where, but ${parts[0]} is — shall I use ${parts[0]}? Reply yes to use it.")
+        }
+        val rawNumber = resolved
+        val name = target
         // ---- open the chat (no pre-filled text — RANI types it herself) ----
         val opened = when (channel.lowercase()) {
             "whatsapp" -> {
                 val e164 = ContactsHelper.toE164(ctx, rawNumber)
-                    ?: return SendOutcome.Failed("WhatsApp ke liye number country code ke saath chahiye (jaise +92...), Babu Jaan.")
+                    ?: return SendOutcome.Failed("For WhatsApp I need the number with its country code (for example +92...).")
                 openUrl(ctx, "https://wa.me/${e164.removePrefix("+")}")
             }
             else -> openSms(ctx, rawNumber)
         }
-        if (!opened) return SendOutcome.Failed("Chat nahi khul saki, Babu Jaan — app installed hai na check karo.")
+        if (!opened) return SendOutcome.Failed("I could not open the chat — please check that the app is installed.")
         // ---- wait for the message box (max ~8s) ----
         var waited = 0
         while (waited < 8000) {
@@ -58,7 +85,7 @@ object MessageSender {
             reopenWithText(ctx, channel, rawNumber, message)
             delay(1200)
             return if (tapSend(svc)) SendOutcome.Sent(name, channel)
-            else SendOutcome.Failed("Message likh diya lekin Send button nahi mila, Babu Jaan — aap khud Send dabao.")
+            else SendOutcome.Failed("I wrote the message but could not find the Send button — please press Send yourself.")
         }
         // ---- type the message ----
         var typed = svc.typeText(message)
@@ -70,11 +97,11 @@ object MessageSender {
             reopenWithText(ctx, channel, rawNumber, message)
             delay(1200)
             return if (tapSend(svc)) SendOutcome.Sent(name, channel)
-            else SendOutcome.Failed("Message type nahi ho saka, Babu Jaan — chat khula hai, aap khud likh kar bhej dein.")
+            else SendOutcome.Failed("I could not type the message — the chat is open, please write and send it yourself.")
         }
         delay(400)
         return if (tapSend(svc)) SendOutcome.Sent(name, channel)
-        else SendOutcome.Failed("Message likh diya hai, Babu Jaan — Send button nahi mila, aap khud Send dabao.")
+        else SendOutcome.Failed("I have written the message — I could not find the Send button, please press Send yourself.")
     }
 
     private suspend fun tapSend(svc: RaniAccessibilityService): Boolean {

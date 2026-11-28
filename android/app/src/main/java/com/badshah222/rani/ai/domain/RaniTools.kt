@@ -6,8 +6,14 @@ package com.badshah222.rani.ai.domain
  * WebSearchPage.ENGINES / SITES). Prompts are MYRA's exact words; RANI only
  * swaps the name ("MYRA" -> "RANI") where the prompt addresses the assistant.
  *
- * v2.0.0 §22.4 — the Skills catalog: 65 real skills across 12 categories.
- * Every skill is REAL, in exactly one of three kinds — never fabricated:
+ * v3.0.0 — the Skills catalog: 66 real skills across 12 categories
+ *  (65 in v2.0.0 + "Turn the Torch On/Off", §23.1 P0). The count is the
+ *  whole list below: direct Skill( entries + fromTool( entries (7, built
+ *  from the original AiTool entries) + fromRoutine( entries (6). Counting
+ *  only direct Skill( lines (53) UNDERCOUNTS — that was the "65 → 53"
+ *  misreading in the v3.0.0 fix pass; the true runtime total is
+ *  skills.size, shown on screen. Every skill is REAL, in exactly one
+ *  of three kinds — never fabricated:
  *  (a) CHAT — Gemini answers through the existing c.ai.chat prompt-template
  *      pattern (name + ask-prompt + template with {x}). It is never
  *      presented as live data, a live price, a live score or a verified
@@ -81,7 +87,7 @@ object RaniTools {
      *  native handlers — so they cannot drift from the originals. (The
      *  8th original, Analyze File, is NOT a skill card: it stays as its
      *  own file-picker section below the catalog, so the runtime total
-     *  stays exactly the 65 skills below.) */
+     *  stays exactly the 66 skills below.) */
     private fun fromTool(
         name: String, category: String, description: String,
         kind: SkillKind, action: String? = null,
@@ -114,13 +120,14 @@ object RaniTools {
         Routine("Clean Up", "Give me tips to organise my Downloads folder.", null, null),
     )
 
-    /** 65 skills — 6 + 5 + 5 + 5 + 6 + 6 + 5 + 5 + 5 + 5 + 6 + 6. The
+    /** 66 skills — 7 + 5 + 5 + 5 + 6 + 6 + 5 + 5 + 5 + 5 + 6 + 6. The
      *  screen shows skills.size as the total, computed at runtime, never
      *  hardcoded — adding or removing a skill updates the count itself. */
     val skills = listOf(
-        // ---- Phone Control (6, NATIVE — Live tools / accessibility) ----
+        // ---- Phone Control (7, NATIVE — Live tools / accessibility) ----
         Skill("Open Any App", "Phone Control", "Open any app on your phone by name.", SkillKind.NATIVE, "Which app should I open?", "", action = "open_app"),
-        Skill("Call a Contact", "Phone Control", "Call someone from your contacts by name.", SkillKind.NATIVE, "Who should I call?", "", action = "call_contact"),
+        Skill("Dial a Contact", "Phone Control", "Open the dialer for someone from your contacts by name — you press Call yourself.", SkillKind.NATIVE, "Who should I call?", "", action = "call_contact"),
+        Skill("Turn the Torch On/Off", "Phone Control", "Switch the phone flashlight on or off.", SkillKind.NATIVE, "Torch on or off?", "", action = "set_torch"),
         Skill("Set an Alarm", "Phone Control", "Set an alarm for any time.", SkillKind.NATIVE, "What time should the alarm ring? For example: 6 am or 6:30.", "", action = "set_alarm"),
         Skill("Set a Timer", "Phone Control", "Start a countdown timer.", SkillKind.NATIVE, "How long should the timer run? For example: 10 minutes.", "", action = "set_timer"),
         Skill("Open Wi-Fi / Bluetooth Settings", "Phone Control", "Open the Wi-Fi or Bluetooth settings page.", SkillKind.NATIVE, "Which settings should I open — Wi-Fi or Bluetooth?", "", action = "open_settings"),
@@ -177,7 +184,7 @@ object RaniTools {
         Skill("Travel Checklist", "Travel", "Documents, bookings and packing, checked off.", SkillKind.CHAT, "Where are you travelling to?", "Make a travel checklist for: {x} — documents, bookings, packing and health."),
         // ---- Entertainment (5) ----
         Skill("Play Music", "Entertainment", "Play a song in the music app.", SkillKind.NATIVE, "Which song or artist should I play?", "", action = "play_music"),
-        Skill("Tell a Joke", "Entertainment", "A short, clean joke.", SkillKind.CHAT, "What kind of joke do you want?", "Tell me a short, clean joke about: {x}"),
+        Skill("Tell a Joke", "Entertainment", "A short, clean joke — live from the joke service, with a chat fallback.", SkillKind.NATIVE, "What kind of joke do you want?", "Tell me a short, clean joke about: {x}", action = "tell_joke"),
         Skill("Tell a Bedtime Story", "Entertainment", "A short, gentle story for the night.", SkillKind.CHAT, "What should the bedtime story be about?", "Tell a short, gentle bedtime story about: {x}"),
         Skill("Movie Recommendation", "Entertainment", "A movie pick from general knowledge.", SkillKind.CHAT, "What kind of movie do you like?", "Recommend a movie for someone who likes {x}, from your general knowledge."),
         Skill("Play a Quiz Game", "Entertainment", "A quiz game with score, one question at a time.", SkillKind.CHAT, "Which topic should the quiz game be about?", "Play a quiz game with me about {x}: ask one question at a time and keep score."),
@@ -194,7 +201,7 @@ object RaniTools {
         fromRoutine("Focus Mode", "Focus Mode", "Daily Life", "Low volume, no interruptions."),
         fromRoutine("Meeting Mode", "Meeting Mode", "Daily Life", "Silent while you are in a meeting."),
         fromRoutine("Clean Up", "Clean Up", "Daily Life", "Tips to organise your Downloads folder."),
-        Skill("Weather Today", "Daily Life", "Today's weather. Coming soon.", SkillKind.COMING_SOON, "Today's weather needs a live weather source, which is not connected yet — so I will not invent it.", ""),
+        Skill("Weather Today", "Daily Life", "Today's weather, live from the weather service.", SkillKind.NATIVE, "Which city? (Default: Swabi.)", "", action = "weather_today"),
     )
 
     data class Engine(val key: String, val label: String, val urlTemplate: String)

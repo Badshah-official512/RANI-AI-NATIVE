@@ -13,16 +13,21 @@ import androidx.core.content.ContextCompat
  * the phone (owner rule, spec §14). Used so RANI can call / message anyone
  * by name, and for the Contacts screen. Nothing here sends data anywhere.
  */
-data class ContactEntry(val id: Long, val name: String, val numbers: List<String>)
+data class ContactEntry(val id: Long, val name: String, val numbers: List<String>, val labels: List<String> = emptyList())
 
 object ContactsHelper {
     fun hasPermission(ctx: Context): Boolean =
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
 
-    /** All contacts with at least one number, sorted by name. Cap 5000 (safety). */
+    /** All contacts with at least one number, sorted by name. Cap 5000 (safety).
+     *  FIX-2 (v3.0.0 §23.4): also captures the REAL per-number label from
+     *  Phone.TYPE (mobile/home/work/…) — the old code read no type at all,
+     *  so ContactMind's import had to fabricate "mobile" for every first
+     *  number and ambiguous options were indistinguishable. */
     fun loadAll(ctx: Context): List<ContactEntry> {
         if (!hasPermission(ctx)) return emptyList()
         val map = LinkedHashMap<Long, MutableList<String>>()
+        val labMap = LinkedHashMap<Long, MutableList<String>>()
         val names = HashMap<Long, String>()
         runCatching {
             ctx.contentResolver.query(
@@ -31,6 +36,8 @@ object ContactsHelper {
                     ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
                     ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
                     ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    ContactsContract.CommonDataKinds.Phone.TYPE,
+                    ContactsContract.CommonDataKinds.Phone.LABEL,
                 ),
                 null, null,
                 "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC",
@@ -38,6 +45,8 @@ object ContactsHelper {
                 val idI = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
                 val nameI = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
                 val numI = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                val typeI = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.TYPE)
+                val labelI = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.LABEL)
                 while (c.moveToNext() && map.size < 5000) {
                     val id = c.getLong(idI)
                     val name = c.getString(nameI)?.trim().orEmpty()
@@ -45,12 +54,33 @@ object ContactsHelper {
                     if (name.isEmpty() || num.isEmpty()) continue
                     names[id] = name
                     val list = map.getOrPut(id) { mutableListOf() }
-                    if (!list.contains(num)) list.add(num)
+                    val labs = labMap.getOrPut(id) { mutableListOf() }
+                    if (!list.contains(num)) {
+                        list.add(num)
+                        labs.add(labelFor(typeI, labelI, c))
+                    }
                 }
             }
         }
-        return map.entries.map { (id, nums) -> ContactEntry(id, names[id] ?: "", nums) }
+        return map.entries.map { (id, nums) -> ContactEntry(id, names[id] ?: "", nums, labMap[id] ?: emptyList()) }
             .filter { it.name.isNotEmpty() }
+    }
+
+    /** Real label for one phone row: the stored TYPE (mobile/home/work/…),
+     *  or the custom label for TYPE_CUSTOM, lowercased. Never invented. */
+    private fun labelFor(typeI: Int, labelI: Int, c: android.database.Cursor): String {
+        if (typeI < 0) return "mobile"
+        return when (c.getInt(typeI)) {
+            ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE -> "mobile"
+            ContactsContract.CommonDataKinds.Phone.TYPE_HOME -> "home"
+            ContactsContract.CommonDataKinds.Phone.TYPE_WORK -> "work"
+            ContactsContract.CommonDataKinds.Phone.TYPE_WORK_MOBILE -> "work mobile"
+            ContactsContract.CommonDataKinds.Phone.TYPE_MAIN -> "main"
+            ContactsContract.CommonDataKinds.Phone.TYPE_COMPANY_MAIN -> "company"
+            ContactsContract.CommonDataKinds.Phone.TYPE_CUSTOM ->
+                c.getString(labelI)?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: "other"
+            else -> "other"
+        }
     }
 
     /** Best match for a spoken name: exact > starts-with > contains > word-prefix. */

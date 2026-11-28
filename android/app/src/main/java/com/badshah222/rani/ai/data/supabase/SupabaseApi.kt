@@ -166,13 +166,16 @@ class SupabaseApi(private val token: suspend () -> String?) {
      * never thrown, never blocking the call. The on-device store is the
      * source of truth; sync is a copy, not a dependency.
      */
-    suspend fun syncMemory(userId: String, kind: String, title: String, content: String, facts: JSONObject?, source: String) {
-        if (userId.isBlank()) return
+    /** Returns true when the row was written. A 'visual' row fails the
+     *  old CHECK until migration 017 is run — the caller keeps it
+     *  on-device and retries later (never crash, never lose the note). */
+    suspend fun syncMemory(userId: String, kind: String, title: String, content: String, facts: JSONObject?, source: String): Boolean {
+        if (userId.isBlank()) return false
         val b = JSONObject().put("user_id", userId).put("app", APP_TAG).put("kind", kind)
             .put("title", title.take(120)).put("content", content)
             .put("facts", facts ?: JSONObject()).put("source", source)
             .put("updated_at", java.time.Instant.now().toString())
-        postRaniTable("rani_memories", b)
+        return postRaniTable("rani_memories", b)
     }
 
     /** Deletes ALL of the user's rani_memories rows ("Forget everything"). Best-effort. */

@@ -60,12 +60,12 @@ fun ControlsScreen(vm: HomeViewModel, onBack: () -> Unit, onNav: (String) -> Uni
                 style = MaterialTheme.typography.bodyMedium, color = Mute,
             )
 
-            StonicSection("Voice & Call", Icons.Default.Call) {
-                ControlSwitch(Icons.Default.RecordVoiceOver, "Live voice", "Gemini Live real voice on Voice Call", liveOn, vm::setLive)
+            StonicSection("Voice & Live", Icons.Default.RecordVoiceOver) {
+                ControlSwitch(Icons.Default.RecordVoiceOver, "Live voice", "Gemini Live real voice", liveOn, vm::setLive)
                 ControlLink(Icons.Default.Mic, "Live model & voices", "Pick the Live model, voice and listen mode") { onNav("voicemode") }
                 ControlLink(Icons.Default.Favorite, "Voices & emotions", "All female voices · now ${emotion.label} · 100+ emotions") { onNav("settings") }
                 ControlSwitch(Icons.Default.VolumeUp, "Speak replies aloud", "RANI speaks every chat reply", speakOn, vm::setSpeakReplies)
-                ControlLink(Icons.Default.Call, "Voice Call", "Start a real voice call with RANI") { onNav("voice") }
+                ControlLink(Icons.Default.Mic, "Talk to RANI", "Start a live voice session with RANI") { onNav("voice") }
                 ControlLink(Icons.Default.Chat, "Chat", "Message RANI — text replies") { onNav("chat") }
             }
 

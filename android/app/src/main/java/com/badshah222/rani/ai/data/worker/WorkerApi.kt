@@ -59,10 +59,12 @@ class WorkerApi(private val tokenProvider: (suspend () -> String?)? = null) {
         }.getOrNull()
     }
 
-    private suspend fun postJson(url: String, json: String): String? = withContext(Dispatchers.IO) {
+    private suspend fun postJson(url: String, json: String, bearer: String? = null): String? = withContext(Dispatchers.IO) {
         runCatching {
-            val req = Request.Builder().url(url)
+            val rb = Request.Builder().url(url)
                 .header("Content-Type", "application/json")
+            if (bearer != null) rb.header("Authorization", "Bearer $bearer")
+            val req = rb
                 .post(json.toRequestBody("application/json".toMediaType())).build()
             http.newCall(req).execute().use { r ->
                 if (!r.isSuccessful) return@withContext null
@@ -78,6 +80,57 @@ class WorkerApi(private val tokenProvider: (suspend () -> String?)? = null) {
                 r.body?.bytes()
             }
         }.getOrNull()
+    }
+
+    /** v3.0.0 §23.1 P2 item 11 — ONE fail-soft method for the free-tools
+     *  suite (same pattern as chatGroq). `path` is the part after
+     *  /api/tools/, e.g. "weather?city=Swabi". Returns the parsed JSON or
+     *  null when the endpoint is down — the caller then shows COMING_SOON,
+     *  never a fake answer. Verified live 2026-11-28: weather, joke, fact,
+     *  meme, ask, wiki, shorten, lyrics-search, lyrics-get. */
+    suspend fun tool(path: String): JSONObject? {
+        val body = withTimeoutOrNull(30_000) { get("$BASE_URL/api/tools/$path") } ?: return null
+        return runCatching { JSONObject(body) }.getOrNull()
+    }
+
+    /** v3.0.0 §23.1 item 18: News — GET /api/news (verified live 200). */
+    suspend fun news(): JSONObject? {
+        val body = withTimeoutOrNull(30_000) { get("$BASE_URL/api/news") } ?: return null
+        return runCatching { JSONObject(body) }.getOrNull()
+    }
+
+    /** v3.0.0 §23.1 item 26: Dost Room — GET/POST /api/dost?room= (Firebase
+     *  token required; the endpoint answers 401 without one, so it is live
+     *  and auth-gated, not dead). RANI uses its own room name. */
+    suspend fun dostGet(room: String): JSONObject? {
+        val token = tokenProvider?.invoke() ?: return null
+        val body = withTimeoutOrNull(30_000) { get("$BASE_URL/api/dost?room=${enc(room)}", token) } ?: return null
+        return runCatching { JSONObject(body) }.getOrNull()
+    }
+
+    suspend fun dostPost(room: String, name: String, text: String): Boolean {
+        val token = tokenProvider?.invoke() ?: return false
+        val payload = JSONObject().put("name", name).put("text", text).toString()
+        val body = withTimeoutOrNull(30_000) { postJson("$BASE_URL/api/dost?room=${enc(room)}", payload, token) } ?: return false
+        return runCatching { JSONObject(body).optBoolean("ok", true) }.getOrDefault(false)
+    }
+
+    /** v3.0.0 §23.1 item 19: Namaz times — direct public Aladhan API
+     *  (no Worker needed; BADSHAH calls it directly). City default Swabi. */
+    suspend fun namaz(city: String): JSONObject? {
+        val body = withTimeoutOrNull(30_000) {
+            get("https://api.aladhan.com/v1/timingsByCity?city=${enc(city)}&country=Pakistan&method=1")
+        } ?: return null
+        return runCatching { JSONObject(body) }.getOrNull()
+    }
+
+    /** v3.0.0 §23.1 item 13: TikTok fallback — the Worker /api/tools/tiktok
+     *  endpoint exists but is rate-limited (429 "limit" on 2026-11-28), so
+     *  the screen tries the Worker first, then tikwm.com directly (BADSHAH's
+     *  own fallback). */
+    suspend fun tikwm(url: String): JSONObject? {
+        val body = withTimeoutOrNull(30_000) { get("https://tikwm.com/api/?url=${enc(url)}") } ?: return null
+        return runCatching { JSONObject(body) }.getOrNull()
     }
 
     /** Pooled Gemini key for the Live call — BADSHAH's system: the key is

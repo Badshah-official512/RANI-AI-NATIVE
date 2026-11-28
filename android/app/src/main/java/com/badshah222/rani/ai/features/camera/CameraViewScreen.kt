@@ -174,6 +174,9 @@ fun CameraViewScreen(vm: CameraViewModel, onBack: () -> Unit) {
     var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var starting by remember { mutableStateOf(false) }
     var captureError by remember { mutableStateOf<String?>(null) }
+    // v3.0.0 §23.8: front/rear switch — the rear camera shows the world
+    // outside; the front camera shows him. Rebinds on change.
+    var facingFront by remember { mutableStateOf(true) }
 
     val projectionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
         if (res.resultCode == Activity.RESULT_OK && res.data != null) {
@@ -205,8 +208,9 @@ fun CameraViewScreen(vm: CameraViewModel, onBack: () -> Unit) {
         )
     }
 
-    // Bind the front camera once permission is granted.
-    LaunchedEffect(hasCam) {
+    // Bind the selected camera once permission is granted (rebinds when
+    // the front/rear switch changes).
+    LaunchedEffect(hasCam, facingFront) {
         if (!hasCam || starting) return@LaunchedEffect
         starting = true
         runCatching {
@@ -223,7 +227,7 @@ fun CameraViewScreen(vm: CameraViewModel, onBack: () -> Unit) {
                 .build()
             capture = cap
             p.unbindAll()
-            p.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_FRONT_CAMERA, preview, cap)
+            p.bindToLifecycle(lifecycleOwner, if (facingFront) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA, preview, cap)
         }.onFailure { captureError = "Could not start the camera: ${it.message}" }
         starting = false
     }
@@ -258,7 +262,7 @@ fun CameraViewScreen(vm: CameraViewModel, onBack: () -> Unit) {
                 ) {
                     AndroidView({ previewView }, Modifier.fillMaxSize())
                     Text(
-                        "LIVE · FRONT CAMERA",
+                        if (facingFront) "LIVE · FRONT CAMERA" else "LIVE · REAR CAMERA",
                         color = Color.White,
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.align(Alignment.TopStart)
@@ -274,6 +278,12 @@ fun CameraViewScreen(vm: CameraViewModel, onBack: () -> Unit) {
                         )
                     }
                 }
+            }
+            if (hasCam) {
+                Button({ facingFront = !facingFront }, Modifier.fillMaxWidth().padding(top = 10.dp)) {
+                    Text(if (facingFront) "Switch to rear camera" else "Switch to front camera")
+                }
+                Text("Front camera shows you; rear camera shows the world outside. RANI only sees the feed while Awareness is ON.", color = Mute, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
             }
             captureError?.let { Text(it, color = Bad, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }
             error?.let { Text(it, color = Bad, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }

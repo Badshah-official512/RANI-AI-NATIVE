@@ -41,10 +41,10 @@ class PhoneExecutor(private val ctx: Context) {
         PhoneAction.OpenYouTube -> if (launchPackage("com.google.android.youtube") || url("https://www.youtube.com")) PhoneResult.Done("Opening YouTube.") else PhoneResult.Failed("Could not open YouTube.")
         PhoneAction.OpenWhatsApp -> if (launchPackage("com.whatsapp") || launchPackage("com.whatsapp.w4b")) PhoneResult.Done("Opening WhatsApp.") else PhoneResult.Failed("WhatsApp is not installed on this phone.")
         PhoneAction.OpenChrome -> if (launchPackage("com.android.chrome") || url("https://www.google.com")) PhoneResult.Done("Opening Chrome.") else PhoneResult.Failed("Could not open a browser.")
-        is PhoneAction.OpenBrowser -> PhoneResult.Failed("Browser app ke andar se khulta hai.") // intercepted by HomeViewModel before execute()
-        PhoneAction.OpenScreen -> PhoneResult.Failed("Screen share app ke andar se khulta hai.") // intercepted by HomeViewModel before execute()
-        PhoneAction.OpenContacts -> PhoneResult.Failed("Contacts app ke andar se khulte hain.") // intercepted by HomeViewModel before execute()
-        is PhoneAction.AutoSendMessage -> PhoneResult.Failed("Auto-send HomeViewModel se chalta hai.") // intercepted by HomeViewModel before execute()
+        is PhoneAction.OpenBrowser -> PhoneResult.Failed("The browser opens from inside the app.") // intercepted by HomeViewModel before execute()
+        PhoneAction.OpenScreen -> PhoneResult.Failed("Screen share opens from inside the app.") // intercepted by HomeViewModel before execute()
+        PhoneAction.OpenContacts -> PhoneResult.Failed("Contacts open from inside the app.") // intercepted by HomeViewModel before execute()
+        is PhoneAction.AutoSendMessage -> PhoneResult.Failed("Auto-send runs through HomeViewModel.") // intercepted by HomeViewModel before execute()
         is PhoneAction.YouTubeSearch -> youTubeSearch(a.query)
         is PhoneAction.DeviceInfo -> deviceInfo(a.kind)
         is PhoneAction.Volume -> volume(a.dir)
@@ -59,14 +59,14 @@ class PhoneExecutor(private val ctx: Context) {
             PhoneResult.Done("Alarm set for %02d:%02d. Confirm it in the clock app.".format(a.hour24, a.minute)) else PhoneResult.Failed("No clock app found.")
         is PhoneAction.StartTimer -> if (launch(Intent(AlarmClock.ACTION_SET_TIMER).putExtra(AlarmClock.EXTRA_LENGTH, a.seconds).putExtra(AlarmClock.EXTRA_MESSAGE, a.label ?: "RANI AI").putExtra(AlarmClock.EXTRA_SKIP_UI, false)))
             PhoneResult.Done("Timer started for ${a.seconds / 60} min ${a.seconds % 60} sec.") else PhoneResult.Failed("No clock app found.")
-        is PhoneAction.Call -> withNumber(a.target) { num -> if (launch(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(num))))) PhoneResult.Done("Dialer opened for $num. Press call to connect.") else PhoneResult.Failed("No dialer found.") }
+        is PhoneAction.Call -> withNumber(a.target) { num -> if (launch(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(num))))) PhoneResult.Done("Dialer opened — press Call to connect.") else PhoneResult.Failed("No dialer found.") }
         is PhoneAction.Flashlight -> torch(a.on)
         // ---- F4 (v1.9.0 §21.8): the chat path gets the same new tools as Live ----
         is PhoneAction.Reminder -> setReminder(a.text, a.whenText)
         is PhoneAction.OpenSettings -> openSettings(a.section)
         is PhoneAction.PlayMusic -> playMusic(a.query, a.app)
         PhoneAction.TakePhoto -> takePhoto()
-        is PhoneAction.Sms -> withNumber(a.target) { num -> if (launch(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(num))).putExtra("sms_body", a.message))) PhoneResult.Done("Message ready for $num. Press send in your messages app.") else PhoneResult.Failed("No SMS app found.") }
+        is PhoneAction.Sms -> withNumber(a.target) { num -> if (launch(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(num))).putExtra("sms_body", a.message))) PhoneResult.Done("Message ready — press Send in your messages app.") else PhoneResult.Failed("No SMS app found.") }
         is PhoneAction.WhatsAppMessage -> withNumber(a.target) { num ->
             val e164 = toE164(num) ?: return@withNumber PhoneResult.Failed("I need the number with country code (for example +92...) to open WhatsApp.")
             if (url("https://wa.me/${e164.removePrefix("+")}?text=" + URLEncoder.encode(a.message, "UTF-8"))) PhoneResult.Done("WhatsApp chat opened with your message ready. Press send.") else PhoneResult.Failed("Could not open WhatsApp.")
@@ -92,19 +92,47 @@ class PhoneExecutor(private val ctx: Context) {
         val q = URLEncoder.encode(query, "UTF-8")
         val yt = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$q"))
             .setPackage("com.google.android.youtube")
-        if (launch(yt)) return PhoneResult.Done("YouTube par \"$query\" search kar rahi hoon, Babu Jaan.")
-        if (url("https://www.youtube.com/results?search_query=$q")) return PhoneResult.Done("YouTube par \"$query\" search kar rahi hoon, Babu Jaan.")
-        return PhoneResult.Failed("YouTube search nahi khul saki.")
+        if (launch(yt)) return PhoneResult.Done("Searching YouTube for \"$query\".")
+        if (url("https://www.youtube.com/results?search_query=$q")) return PhoneResult.Done("Searching YouTube for \"$query\".")
+        return PhoneResult.Failed("YouTube search could not be opened.")
     }
 
+    /** Resolves a name to a number through the single ContactMind
+     *  resolver (FIX-1/FIX-2/FIX-4, v3.0.0 §23.4) — the same one the Live
+     *  bridge, the Tools card and auto-send use. A follow-up pick
+     *  ("Ami option 2" / "second Ami" / "doosri Ami") and a number pick
+     *  ("Ami mobile" / "Ami 2") are understood here too — the old code
+     *  called resolve() but never pickNumber(), so "Ami mobile" in chat
+     *  fell into NotFound. In save-OFF mode (the default) an ambiguous
+     *  name is a COUNT of exact matches, never findBest's first score-100
+     *  hit — 3 contacts all named "Ami" ask, never silently dial the
+     *  first. A question string is returned as a Failed message; no
+     *  intent is ever launched on it. */
     private fun withNumber(target: String, f: (String) -> PhoneResult): PhoneResult {
         if (target.matches(Regex("^[+]?[0-9]{5,}$"))) return f(target)
-        if (!ContactsHelper.hasPermission(ctx)) return PhoneResult.NeedPermission(Manifest.permission.READ_CONTACTS, "To find \"$target\" in your contacts I need permission to read contacts. Or say the phone number instead.")
-        val entry = ContactsHelper.findBest(ctx, target)
-            ?: return PhoneResult.Failed("I could not find \"$target\" in your contacts.")
-        val num = ContactsHelper.bestNumber(entry)
-            ?: return PhoneResult.Failed("I found \"$target\" but there is no number saved for them.")
-        return f(num)
+        val num = com.badshah222.rani.ai.core.ContactMind(ctx).resolveToNumber(target)
+        return when {
+            num == "notfound" ->
+                PhoneResult.Failed("I could not find \"$target\" in your contacts.")
+            // FIX-3 item 4: save-OFF + genuinely not found — say so
+            // honestly (§23.4 item 1) instead of "could not find".
+            num == "notfound_nosave" ->
+                PhoneResult.Failed("I have not saved your contacts - turn on 'Save my contacts to RANI's mind' in Settings so I can find names like that. Or say the phone number instead.")
+            num == "nocontacts" ->
+                PhoneResult.NeedPermission(Manifest.permission.READ_CONTACTS, "To find \"$target\" in your contacts I need permission to read contacts. Or say the phone number instead.")
+            num == "fail" ->
+                PhoneResult.Failed("I could not understand that contact.")
+            num.startsWith("multiple:") ->
+                PhoneResult.Failed("Which ${target} do you mean — ${num.removePrefix("multiple:").replace(Regex(", ([^,]+)$"), " or $1")}?")
+            num.startsWith("multiple_number:") ->
+                PhoneResult.Failed("Which number for $target — ${num.removePrefix("multiple_number:").replace(Regex(", ([^,]+)$"), " or $1")}?")
+            num.startsWith("nearmiss:") -> {
+                val parts = num.removePrefix("nearmiss:").split("|")
+                val where = if (parts.getOrNull(1) == "whatsapp") "contacts or WhatsApp" else "contacts"
+                PhoneResult.Failed("$target is not in your $where, but ${parts[0]} is — shall I use ${parts[0]}? Reply yes to use it.")
+            }
+            else -> f(num)
+        }
     }
 
     private fun toE164(raw: String): String? = ContactsHelper.toE164(ctx, raw)
@@ -136,12 +164,19 @@ class PhoneExecutor(private val ctx: Context) {
         return try {
             val store = SecureStore(ctx)
             val arr = runCatching { JSONArray(store.tasksJson) }.getOrNull() ?: JSONArray()
+            val id = "rem_" + System.currentTimeMillis()
+            val dueEpoch = com.badshah222.rani.ai.core.ReminderTime.parseDue(whenText.trim())
             arr.put(JSONObject()
-                .put("id", "rem_" + System.currentTimeMillis())
+                .put("id", id)
                 .put("title", t)
                 .put("due", whenText.trim())
+                .put("dueEpoch", dueEpoch ?: JSONObject.NULL)
                 .put("status", "pending"))
             store.tasksJson = arr.toString()
+            // v3.0.0 §23.1 item 21: a reminder with a understood due time
+            // FIRES (exact alarm + notification); otherwise it stays a
+            // saved list item.
+            if (dueEpoch != null) com.badshah222.rani.ai.core.ReminderScheduler.schedule(ctx, id, dueEpoch, t)
             PhoneResult.Done(if (whenText.isBlank()) "Reminder saved: \"$t\"." else "Reminder saved: \"$t\" ($whenText).")
         } catch (e: Exception) { PhoneResult.Failed("Could not save the reminder.") }
     }
@@ -222,29 +257,29 @@ class PhoneExecutor(private val ctx: Context) {
                 val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager
                 val pct = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
                 val charging = bm.isCharging
-                PhoneResult.Done("Battery $pct percent hai, Babu Jaan${if (charging) " — aur charging par lagi hai" else ""}.")
+                PhoneResult.Done("Battery is at $pct percent${if (charging) " — and charging" else ""}.")
             }
             "storage" -> {
                 val dir = android.os.Environment.getDataDirectory()
                 val fs = android.os.StatFs(dir.path)
                 val total = fs.totalBytes / (1024.0 * 1024 * 1024)
                 val free = fs.availableBytes / (1024.0 * 1024 * 1024)
-                PhoneResult.Done("Storage: kul ${"%.0f".format(total)} GB mein se ${"%.1f".format(free)} GB khali hai, Babu Jaan.")
+                PhoneResult.Done("Storage: ${"%.1f".format(free)} GB free out of ${"%.0f".format(total)} GB total.")
             }
-            "time" -> PhoneResult.Done("Abhi waqt hai " + java.text.SimpleDateFormat("h:mm a", java.util.Locale.ENGLISH).format(java.util.Date()) + ", Babu Jaan.")
-            "date" -> PhoneResult.Done("Aaj ki tareekh hai " + java.text.SimpleDateFormat("d MMMM yyyy, EEEE", java.util.Locale.ENGLISH).format(java.util.Date()) + ", Babu Jaan.")
-            else -> PhoneResult.Failed("Ye maloomat nahi mili.")
+            "time" -> PhoneResult.Done("The time is " + java.text.SimpleDateFormat("h:mm a", java.util.Locale.ENGLISH).format(java.util.Date()) + ".")
+            "date" -> PhoneResult.Done("Today is " + java.text.SimpleDateFormat("d MMMM yyyy, EEEE", java.util.Locale.ENGLISH).format(java.util.Date()) + ".")
+            else -> PhoneResult.Failed("I could not find that information.")
         }
-    } catch (e: Exception) { PhoneResult.Failed("Device info nahi mil saki: ${e.message?.take(60)}") }
+    } catch (e: Exception) { PhoneResult.Failed("Could not get device info: ${e.message?.take(60)}") }
 
     private fun volume(dir: String): PhoneResult = try {
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
         val stream = android.media.AudioManager.STREAM_MUSIC
         when (dir) {
-            "up" -> { am.adjustStreamVolume(stream, android.media.AudioManager.ADJUST_RAISE, android.media.AudioManager.FLAG_SHOW_UI); PhoneResult.Done("Volume barha diya, Babu Jaan.") }
-            "down" -> { am.adjustStreamVolume(stream, android.media.AudioManager.ADJUST_LOWER, android.media.AudioManager.FLAG_SHOW_UI); PhoneResult.Done("Volume kam kar diya, Babu Jaan.") }
-            "mute" -> { am.adjustStreamVolume(stream, android.media.AudioManager.ADJUST_MUTE, android.media.AudioManager.FLAG_SHOW_UI); PhoneResult.Done("Mute kar diya, Babu Jaan.") }
-            else -> PhoneResult.Failed("Volume samajh nahi aya.")
+            "up" -> { am.adjustStreamVolume(stream, android.media.AudioManager.ADJUST_RAISE, android.media.AudioManager.FLAG_SHOW_UI); PhoneResult.Done("Volume turned up.") }
+            "down" -> { am.adjustStreamVolume(stream, android.media.AudioManager.ADJUST_LOWER, android.media.AudioManager.FLAG_SHOW_UI); PhoneResult.Done("Volume turned down.") }
+            "mute" -> { am.adjustStreamVolume(stream, android.media.AudioManager.ADJUST_MUTE, android.media.AudioManager.FLAG_SHOW_UI); PhoneResult.Done("Muted.") }
+            else -> PhoneResult.Failed("I did not understand that volume command.")
         }
-    } catch (e: Exception) { PhoneResult.Failed("Volume change nahi hua: ${e.message?.take(60)}") }
+    } catch (e: Exception) { PhoneResult.Failed("Volume could not be changed: ${e.message?.take(60)}") }
 }

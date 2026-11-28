@@ -78,17 +78,21 @@ class CallEngine(private val activity: MainActivity) {
      * Creates the WebView ONCE per call, with the MainActivity context
      * (never a Compose context), the factory settings copied verbatim
      * from HeroLiveWebView, the SAME shared RaniLiveBridge, and the SAME
-     * URL (+ v=2.0.0, &memory=, &pet=). Refuses a second start while one
+     * URL (+ v=3.0.0, &memory=, &pet=, &name=, &uninstall=). Refuses a second start while one
      * is active (the N-2 guard, now enforced in the engine).
      */
-    fun start(key: String, voice: String, memory: String, petName: String): Boolean {
+    fun start(key: String, voice: String, memory: String, petName: String, userName: String = "Badshah"): Boolean {
         if (webView != null) return false
         triedReload = false
         currentUrl = "file:///android_asset/rani-live.html?key=" + URLEncoder.encode(key, "UTF-8") +
             "&voice=" + URLEncoder.encode(voice, "UTF-8") +
-            "&model=gemini-3.8-live&v=2.0.0&embed=1" +
+            "&model=gemini-3.8-live&v=3.0.0&embed=1" +
             "&memory=" + URLEncoder.encode(memory, "UTF-8") +
-            "&pet=" + URLEncoder.encode(petName, "UTF-8")
+            "&pet=" + URLEncoder.encode(petName, "UTF-8") +
+            "&name=" + URLEncoder.encode(userName, "UTF-8") +
+            // v3.0.0 §23.5 (dev-finish): the self-uninstall switch gates the
+            // tool's DECLARATION in the page (&uninstall=1 only when ON).
+            "&uninstall=" + (if (SecureStore(activity.applicationContext).selfUninstallEnabled) "1" else "0")
         val url = currentUrl
         val wv = WebView(activity).apply {
             layoutParams = FrameLayout.LayoutParams(
@@ -236,6 +240,31 @@ class CallEngine(private val activity: MainActivity) {
         activity.runOnUiThread {
             runCatching {
                 wv.evaluateJavascript("window.onCameraFrame && onCameraFrame('$base64Jpeg')", null)
+            }
+        }
+    }
+
+    /** v3.0.0 §23.1 item 5 / §23.8: feed one screen-share JPEG frame into
+     *  the Live session (same realtimeInput.video entry as Awareness
+     *  frames — the caller pauses Awareness frames while screen-sharing
+     *  so the two sources never collide in one stream). */
+    /** v3.0.0 §23.1 item 3: the finished image (data URI, or "" on
+     *  failure) is pushed into the page's window.onGeneratedImage — the
+     *  voice never waited for it. */
+    fun onGeneratedImage(dataUri: String) {
+        val wv = webView ?: return
+        activity.runOnUiThread {
+            runCatching {
+                wv.evaluateJavascript("window.onGeneratedImage && onGeneratedImage('$dataUri')", null)
+            }
+        }
+    }
+
+    fun sendScreenFrame(base64Jpeg: String) {
+        val wv = webView ?: return
+        activity.runOnUiThread {
+            runCatching {
+                wv.evaluateJavascript("window.onScreenFrame && onScreenFrame('$base64Jpeg')", null)
             }
         }
     }

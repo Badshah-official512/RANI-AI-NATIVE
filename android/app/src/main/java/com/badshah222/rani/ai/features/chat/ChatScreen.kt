@@ -63,6 +63,15 @@ fun ChatScreen(vm: HomeViewModel, onBack: () -> Unit, onVoice: () -> Unit) {
             }
             IconButton({ vm.newChat() }) { Icon(Icons.Default.Add, "New chat") }
         }
+        // v3.0.0 §23.1 item 28: active AI Mode bar with an x to clear.
+        val modeId by vm.modeId.collectAsState()
+        val mode = com.badshah222.rani.ai.domain.RaniModes.fromId(modeId)
+        if (mode != null) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Mode: ${mode.title}", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = VioletSoft)
+                TextButton(vm::clearMode) { Text("Clear", color = Mute) }
+            }
+        }
         HorizontalDivider(color = Panel2)
 
         error?.let { e ->
@@ -92,7 +101,7 @@ fun ChatScreen(vm: HomeViewModel, onBack: () -> Unit, onVoice: () -> Unit) {
                 }
             }
             IconButton({ photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
-                Icon(Icons.Default.PhotoLibrary, "Photo bhejo — AI dekh kar batayega", tint = VioletSoft)
+                Icon(Icons.Default.PhotoLibrary, "Attach a photo — RANI will look at it and tell you what is in it", tint = VioletSoft)
             }
             OutlinedTextField(text, { text = it }, Modifier.weight(1f), placeholder = { Text("Message RANI…") }, maxLines = 4, shape = RoundedCornerShape(26.dp))
             IconButton({ if (state == CharState.Listening) vm.stopListening() else mic() }) {
@@ -116,7 +125,7 @@ private fun MessageBubble(m: ChatMessage, vm: HomeViewModel, clipboard: androidx
             VoiceOrb(CharState.Idle, 0f, vm.lowPower, Modifier.padding(end = 6.dp, top = 2.dp).size(26.dp))
             Column {
                 UrlImage(url, Modifier.widthIn(max = 300.dp).fillMaxWidth().height(300.dp).clip(RoundedCornerShape(16.dp)))
-                Text("Generated image · link ~1 ghante valid hai", color = Mute, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                Text("Generated image · link valid for about 1 hour", color = Mute, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
             }
         }
         return
@@ -230,13 +239,13 @@ fun saveCodeZip(ctx: android.content.Context, files: List<Pair<String, String>>)
                     files.forEach { (n, c) -> z.putNextEntry(java.util.zip.ZipEntry(n)); z.write(c.toByteArray(Charsets.UTF_8)); z.closeEntry() }
                 }
             } ?: return "ZIP could not be created."
-            "ZIP Downloads mein save ho gaya: $name"
+            "ZIP saved in Downloads: $name"
         } else {
             val f = java.io.File(ctx.cacheDir, name)
             java.util.zip.ZipOutputStream(java.io.FileOutputStream(f)).use { z ->
                 files.forEach { (n, c) -> z.putNextEntry(java.util.zip.ZipEntry(n)); z.write(c.toByteArray(Charsets.UTF_8)); z.closeEntry() }
             }
-            "ZIP ban gaya: ${f.absolutePath}"
+            "ZIP saved: ${f.absolutePath}"
         }
-    } catch (e: Exception) { "ZIP banane mein masla: ${e.message?.take(60) ?: "unknown"}" }
+    } catch (e: Exception) { "Could not make the ZIP: ${e.message?.take(60) ?: "unknown"}" }
 }
