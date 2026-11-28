@@ -167,7 +167,7 @@ class FreeToolsViewModel(app: Application) : AndroidViewModel(app) {
             "meme" -> {
                 val url = j?.optString("url").orEmpty()
                 if (url.isBlank()) { error.value = "No meme right now — please try again in a bit."; return@io }
-                funText.value = j.optString("title").ifBlank { "Meme" }
+                funText.value = j?.optString("title").orEmpty().ifBlank { "Meme" }
                 funImage.value = withContext(Dispatchers.IO) {
                     runCatching { URL(url).openStream().readBytes() }.getOrNull()
                 }
