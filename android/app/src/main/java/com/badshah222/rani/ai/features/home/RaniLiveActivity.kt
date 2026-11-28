@@ -170,7 +170,7 @@ class RaniLiveActivity : ComponentActivity() {
         val key = intent.getStringExtra(EXTRA_KEY) ?: ""
         val voice = intent.getStringExtra(EXTRA_VOICE) ?: "Aoede"
         val model = intent.getStringExtra(EXTRA_MODEL) ?: "gemini-3.8-live"
-        val ver = intent.getStringExtra(EXTRA_VER) ?: "1.9.0"
+        val ver = intent.getStringExtra(EXTRA_VER) ?: "2.0.0"
         liveUrl = "$LIVE_URL?key=" + URLEncoder.encode(key, "UTF-8") +
             "&voice=" + URLEncoder.encode(voice, "UTF-8") +
             "&model=" + URLEncoder.encode(model, "UTF-8") +

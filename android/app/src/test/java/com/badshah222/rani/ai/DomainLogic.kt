@@ -1,5 +1,6 @@
 package com.badshah222.rani.ai
 
+import com.badshah222.rani.ai.core.FarewellDetector
 import com.badshah222.rani.ai.data.ai.Pollinations
 import com.badshah222.rani.ai.domain.*
 
@@ -94,5 +95,25 @@ object DomainLogic {
         eq("vol-up", p("volume barhao"), PhoneAction.Volume("up"))
         eq("vol-down", p("awaz kam karo"), PhoneAction.Volume("down"))
         eq("screen", p("meri screen dekho"), PhoneAction.OpenScreen)
+
+        // ---- v2.0.0 §22.3 farewell detector (mirrors detectFarewell() in
+        // rani-live.html — same phrases, same three rules, same guards) ----
+        val f = FarewellDetector::detect
+        eq("farewell: good night", f("good night", false), "good night")
+        eq("farewell: bas kardo", f("bas kardo", false), "bas kardo")
+        eq("farewell: cut kardo", f("cut kardo", false), "cut kardo")
+        eq("farewell: ok good night", f("ok good night", false), "good night")
+        eq("farewell: allah hafiz", f("Allah Hafiz", false), "allah hafiz")
+        eq("farewell: final clause is bye", f("Allah Hafiz, bye", false), "bye")
+        eq("farewell: final clause", f("ok bas kardo, good night", false), "good night")
+        eq("farewell: repeat fires", f("good night", true), "good night")
+        eq("farewell: story does not fire", f("us ne mujhe good night kaha tha, phir kya hua", false), null)
+        eq("farewell: question does not fire", f("good night ka matlab kya hai?", false), null)
+        eq("farewell: hypothetical does not fire", f("agar main good night kahun to kya hoga", false), null)
+        eq("farewell: long turn does not fire", f("aaj main bohat thak gaya hoon aur kal subah jaldi uthna hai, good night kehna tha bas", false), null)
+        eq("farewell: morning is not farewell", f("good morning, aaj kya karna hai", false), null)
+        eq("farewell: goodbye is goodbye", f("goodbye", false), "goodbye")
+        eq("farewell: assistant goodbye", FarewellDetector.isGoodbye("Good night, Babu Jaan, sleep well."), true)
+        eq("farewell: assistant plain talk is not goodbye", FarewellDetector.isGoodbye("Tell me more about your day."), false)
     }
 }

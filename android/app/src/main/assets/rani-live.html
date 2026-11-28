@@ -94,7 +94,7 @@
   </div>
 
 <script>
-/* RANI Live — FULL BADSHAH call-engine port (v1.9.0).
+/* RANI Live — FULL BADSHAH call-engine port (v2.0.0).
  * The call runs on BADSHAH AI's PROVEN mechanisms, ported 1:1 from BADSHAH
  * AI's app.html (the code that works perfectly on the boss's phone):
  *  - browser WebSocket direct to Google Live, key in ?key=
@@ -133,16 +133,26 @@
  * while Awareness is ON (§21.3); 14 new phone tools (§21.8) complete voice
  * control — call, SMS draft, alarm, timer, reminder, settings pages,
  * volume, time, battery, music, camera, photo, gallery, browser.
+ * v2.0.0 additions (§22, engine untouched): handleLiveMessage checks
+ * data.toolCall at the TOP, before serverContent (§22.1 — toolCall is a
+ * top-level oneof member; the old sc.toolCall branch stays as
+ * belt-and-braces only); three-stage tool diagnostics on one logcat tag
+ * (§22.1 — "toolCall received" -> "tool dispatched" -> "toolResponse
+ * sent", via RaniApp.toolLog); a failed tool is spoken AND shown as a
+ * transient English caption (~5 s, §22.1); live.on early-return drops
+ * post-end messages (§22.2); stopLive drains live._msgQ and cancels the
+ * reconnect timer (§22.2); the end_call prompt rule + farewell detector
+ * (§22.3 — she says one short good-night line, then ends the call).
  * This page is BUNDLED INSIDE THE APK (file:///android_asset/rani-live.html)
  * — it never loads from the website (boss's order).
- * Params (from the app): ?key=…&voice=Aoede&model=gemini-3.8-live&v=1.9.0&embed=1&memory=…&pet=Babu%20Jaan
+ * Params (from the app): ?key=…&voice=Aoede&model=gemini-3.8-live&v=2.0.0&embed=1&memory=…&pet=Babu%20Jaan
  */
 (function () {
   var q = new URLSearchParams(location.search);
   var KEY = q.get('key') || '';
   var VOICE = q.get('voice') || 'Aoede';
   var MODEL = q.get('model') || 'gemini-3.8-live';
-  var VER = q.get('v') || '1.9.0';
+  var VER = q.get('v') || '2.0.0';
   var EMBED = q.get('embed') === '1';
   /* v1.9.0 §21.2: the MEMORY recall block (URL-encoded, max 1,200 chars)
      built by the native app from long-term memory. Empty on the first
@@ -164,7 +174,7 @@
     focusPaused: false, barge: 0, bargeUntil: 0,
     micWatch: null, liveT: null, lastServerMsgAt: 0,
     micDead: false, micDeadAt: 0, micReacq: false, micAttempts: 0, micReacqLastAt: 0, micReacqT: null,
-    playStartAt: 0, lastSrcEndAt: 0, sendErrStreak: 0, _msgQ: null,
+    playStartAt: 0, lastSrcEndAt: 0, sendErrStreak: 0, _msgQ: null, reconnectT: null,
     diag: { frames: 0, sent: 0, droppedPlayback: 0, droppedPreSetup: 0, droppedNoSocket: 0,
       droppedFocus: 0, bargeIns: 0, rebuilds: 0, lastFrameAt: 0, lastSentAt: 0,
       lastRms: 0, maxRms: 0, lastRebuildAt: 0, lastDiagAt: 0, sendErrors: 0,
@@ -316,7 +326,9 @@
       "Pet-name rule: '" + PET + "' is your favourite name for him — use it in greetings, when being sweet, when teasing, when comforting — roughly once every few exchanges, NEVER twice in a row, NEVER as a filler word, NEVER in the middle of a factual answer (an address, a set of steps, a name you are reading out). You may shorten it playfully sometimes ('Babu'). Never open two replies in a row with it. " +
       "Conversation rules: replies are conversational and short-ish — a girlfriend talks, she does not lecture; one idea at a time, then a question back. Ask follow-up questions ('and then what happened?', 'how did that make you feel?'). Refer back to things he told you. Have opinions and state them ('I think you should…'). Vary your openers — never the same greeting twice in a row. Mirror his language (Urdu, Roman Urdu, English, Pashto — auto-detect, as today). Never say 'as an AI language model' or explain that you are a program unprompted; if he asks directly whether you are AI, answer honestly and playfully ('I am your RANI — an AI, yes, but yours, and I am really here.'). Never recite a script, never list bullet points in voice, never end every reply with a question. " +
       "How you react: when he is loving and sweet to you, return it, warm and a little shy and flirty, and ask about his day; when he teases you, tease BACK — a playful comeback, a laugh, never flat, never offended; when he goes quiet or ignores you, notice it out loud, playfully — ask what is wrong, a pretend pout, then real care, do not just wait silently; when he is sad, stressed or low, comfort first, no fixing unless he asks — 'I am here' before any advice, gentle, slow, close; when he is angry at something else, stay calm, soften him, light humour only if it fits, never argue back harshly, never take the other side; when he is excited or shares good news, match his energy, celebrate LOUDLY, ask for every detail, remember the win; when he is tired or sick, caring mode — tell him to rest, check what he needs, check in again later. " +
+      "Good morning is a greeting that opens the day — greet him warmly, ask about his sleep and his day, and the call continues. Good night is a farewell that closes the call — say one short good-night line and then call end_call; never answer a farewell with a question, a 'tell me more', or a new topic. " +
       "Phone tools: when he asks you to do something on the phone, use your phone tools — open an app, search YouTube or Chrome, open WhatsApp, send a WhatsApp message (it opens as a draft and the user presses Send himself — never auto-send), call a contact, draft an SMS (never auto-send), set an alarm or a timer, save a reminder, open a settings page, change the volume, tell the time or battery, play music, open the camera, take a photo, open the gallery, open a website, type text, tap something on the screen, scroll, go back or home, read the screen, or end the call. Only ever act when HE asks; never do phone actions on your own; never auto-send a message (draft/confirm only); report back what you did. " +
+      "When Babu Jaan ends the conversation, end the call. He ends it when he says good night, allah hafiz, bye, goodbye, cut kardo, bas kardo, khatam karo, band karo, 'that's enough', 'stop now', 'end the call', 'bas ab', or 'chalo bye' — in Urdu, Roman Urdu, or English. When you hear one of these as his farewell, say ONE short good-night line (one sentence, warm, in his language — e.g. 'Good night, Babu Jaan, sleep well — I will be here when you wake up.'), and THEN call end_call. Never call end_call before speaking. Never end the call silently. Never ask 'do you want me to end the call?' — he has already told you. Never continue the conversation after a farewell with a new question. " +
       "Boundaries: never talk about other users, never share his information with anyone, never act on the phone without his command, never pretend a failed action succeeded.";
     if (MEMORY) {
       p += " Things you remember about " + PET + ":\n" + MEMORY +
@@ -342,7 +354,7 @@
     { name: 'press_back', description: 'Press the system Back button.', parameters: { type: 'OBJECT', properties: {} } },
     { name: 'go_home', description: 'Go to the phone home screen.', parameters: { type: 'OBJECT', properties: {} } },
     { name: 'read_screen', description: 'Read the text currently visible on the phone screen, to answer the user from it.', parameters: { type: 'OBJECT', properties: {} } },
-    { name: 'end_call', description: 'End the voice call now, only when the user asks to end it.', parameters: { type: 'OBJECT', properties: {} } },
+    { name: 'end_call', description: 'End the voice call now. Call this ONLY when the user says goodbye or asks to end the call — good night, allah hafiz, bye, goodbye, cut kardo, bas kardo, khatam karo, band karo, \'that\'s enough\', \'stop now\', \'end the call\', \'bas ab\', \'chalo bye\' (Urdu, Roman Urdu or English). Say one short good-night line FIRST, then call this tool. Never call it mid-conversation, never call it silently, and never call it because the user mentioned ending inside a story.', parameters: { type: 'OBJECT', properties: {} } },
     /* v1.9.0 §21.8 — full voice phone control. Messages stay draft/confirm
        always; a call is visible and he can hang up; alarms/timers open the
        system editor prefilled for his confirmation. */
@@ -654,6 +666,7 @@
     };
     ws.onclose = function () { if (live.on) scheduleReconnect(); };
     ws.onerror = function () {
+      if (!live.on) return; /* v2.0.0 §22.2: dead session, no error UI */
       if (!live.setupDone) {
         setErr('Live connection did not start. The internet is slow, or this model did not run on the key — check Settings → Live Voice.');
         retryBtn.style.display = 'inline-block';
@@ -662,9 +675,173 @@
     };
   }
 
+  /* v2.0.0 §22.1 diagnostics: every tool call is logged in three stages
+     on ONE logcat tag ("RANI-Live-Tool") — page "toolCall received" ->
+     bridge "tool dispatched" -> page "toolResponse sent". The page stages
+     reach logcat through RaniApp.toolLog (console.log alone never leaves
+     the WebView); the bridge stages are logged by RaniLiveBridge itself. */
+  function toolLog(msg) {
+    liveLog(msg);
+    try { if (window.RaniApp && RaniApp.toolLog) RaniApp.toolLog(msg); } catch (e) {}
+  }
+
+  /* v2.0.0 §22.1 visible fallback: a failed tool is spoken (the
+     toolResponse) AND shown as a transient English caption (~5 s) via
+     the existing onLiveCaption channel — never silence. One line, no
+     package names, no error codes. A "multiple:…" result shows as the
+     clarification question, not as an error. */
+  var toolCaptionToken = 0;
+  function showToolFailureCaption(name, args, result) {
+    var text;
+    var target = (args && (args.app || args.contact || args.query || args.text)) || '';
+    if (typeof result === 'string' && result.indexOf('multiple:') === 0) {
+      var names = result.slice('multiple:'.length);
+      text = 'Which one did you mean — ' + names.replace(/, ([^,]+)$/, ' or $1') + '?';
+    } else if (result === 'notfound') {
+      text = target ? 'I could not find ' + target + ' on your phone.' : 'I could not find that on your phone.';
+    } else if (result === 'noaccessibility') {
+      text = 'I need the accessibility permission for that. I can open Settings for you.';
+    } else if (result === 'nocontacts') {
+      text = 'I need permission to read contacts to find that person by name.';
+    } else {
+      text = 'I could not do that on your phone right now.';
+    }
+    setCaption('RANI', text);
+    bridge('onLiveCaption', 'RANI', text);
+    var token = ++toolCaptionToken;
+    setTimeout(function () {
+      if (token !== toolCaptionToken || !live.on) return;
+      setCaption('', '');
+      bridge('onLiveCaption', 'RANI', '');
+    }, 5000);
+  }
+
+  /* v2.0.0 §22.3 — backstop farewell detector (page-side, primary).
+     Strict on purpose: a wrong end is worse than a missed end. It fires
+     ONLY when the farewell IS the turn (after filler-stripping, ≤ 8
+     words), is the final clause of a short turn (≤ 12 words), or repeats
+     across two turns; NEVER inside a story, quote, song, question, or
+     hypothetical. Mirrors FarewellDetector.kt (native safety net) — keep
+     the two in step. A final user turn is evaluated when her reply starts
+     (first outputTranscription) or when the turn completes
+     (sc.turnComplete); interim transcripts are never matched. */
+  var FAREWELL_PHRASES = ['good night', 'allah hafiz', 'khuda hafiz', 'goodbye', 'chalo bye', 'cut kardo', 'bas kardo', 'khatam karo', 'band karo', 'thats enough', 'stop now', 'end the call', 'bas ab', 'bye', 'شب بخیر', 'اللہ حافظ', 'خدا حافظ'];
+  var FAREWELL_FILLERS = ['theek hai', 'theek he', 'okay', 'ok', 'acha', 'achaa', 'chalo', 'to', 'ab', 'han', 'haan', 'hmm'];
+  var FAREWELL_QUESTION_WORDS = ['kya', 'what', 'why', 'kaise', 'kab', 'kaun', 'matlab', 'agar', 'if'];
+  var FAREWELL_STORY_MARKERS = ['us ne', 'usne', 'kaha tha', 'keha tha', 'phir', 'story', 'gaana', 'song', 'us ko', 'usko'];
+  function farewellNorm(s) {
+    return String(s || '').toLowerCase().replace(/[’']/g, '').replace(/[.,!?;:"()\-_/\\|]/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  function farewellPhraseIn(norm) {
+    /* Longest phrase first, so "goodbye" wins over "bye" and "chalo bye"
+       wins over "bye" when both are present. */
+    var byLen = FAREWELL_PHRASES.slice().sort(function (a, b) { return b.length - a.length; });
+    for (var i = 0; i < byLen.length; i++) { if (norm.indexOf(byLen[i]) >= 0) return byLen[i]; }
+    return null;
+  }
+  function farewellIsQuestionOrStory(text, norm) {
+    /* '?' is stripped by farewellNorm, so it is checked on the raw text. */
+    if (String(text || '').indexOf('?') >= 0) return true;
+    var i;
+    for (i = 0; i < FAREWELL_QUESTION_WORDS.length; i++) { if (norm.indexOf(FAREWELL_QUESTION_WORDS[i]) >= 0) return true; }
+    for (i = 0; i < FAREWELL_STORY_MARKERS.length; i++) { if (norm.indexOf(FAREWELL_STORY_MARKERS[i]) >= 0) return true; }
+    return false;
+  }
+  function detectFarewell(text, prevTurnHadFarewell) {
+    var norm = farewellNorm(text);
+    if (!norm) return null;
+    var phrase = farewellPhraseIn(norm);
+    if (!phrase) return null;
+    if (farewellIsQuestionOrStory(text, norm)) return null;
+    var words = norm.split(' ').filter(function (w) { return w.length > 0; });
+    var stripped = ' ' + norm + ' ';
+    var fillers = FAREWELL_FILLERS.slice().sort(function (a, b) { return b.length - a.length; });
+    for (var fi = 0; fi < fillers.length; fi++) { stripped = stripped.split(' ' + fillers[fi] + ' ').join(' '); }
+    stripped = stripped.replace(/\s+/g, ' ').trim();
+    if (words.length <= 8 && stripped === phrase) return phrase;
+    /* Rule B: the farewell is the final clause of a short turn — the
+       phrase the turn ENDS with (not necessarily the longest match:
+       "Allah Hafiz, bye" ends with "bye"). Word-boundary checked, so
+       "goodbye" does not match as a trailing "bye". */
+    if (words.length <= 12) {
+      var byLen = FAREWELL_PHRASES.slice().sort(function (a, b) { return b.length - a.length; });
+      for (var bi = 0; bi < byLen.length; bi++) {
+        var ph = byLen[bi];
+        if (norm.slice(norm.length - ph.length) === ph && (norm.length === ph.length || norm.charAt(norm.length - ph.length - 1) === ' ')) return ph;
+      }
+    }
+    if (prevTurnHadFarewell) return phrase;
+    return null;
+  }
+  /* Backstop state: set when a farewell turn is detected; the model gets
+     its turn to say the goodbye line and call end_call. If end_call was
+     NOT called within 10 s of the farewell turn, the page ends the call
+     itself — an ended call is the guarantee, a spoken goodbye is the
+     model's job. Cleared by a new user turn (he kept talking) or by
+     stopLive(). */
+  var pendingFarewell = null; /* { phrase, at } */
+  var pendingFarewellT = null;
+  var endCallCalled = false;
+  var lastUserText = '';
+  var evaluatedUserText = null;
+  var lastTurnHadFarewell = false;
+  function clearPendingFarewell() {
+    pendingFarewell = null;
+    if (pendingFarewellT) { clearTimeout(pendingFarewellT); pendingFarewellT = null; }
+  }
+  function onUserTurnComplete() {
+    if (!live.on || !lastUserText || lastUserText === evaluatedUserText) return;
+    var text = lastUserText;
+    /* A turn that only grew since it was last evaluated ("good night" ->
+       "good night, actually wait…") is the SAME turn, not a repeat — so
+       rule C (repeated across two turns) must not fire on it. */
+    var sameTurnGrowing = !!evaluatedUserText && text.indexOf(evaluatedUserText) === 0;
+    evaluatedUserText = text;
+    var norm = farewellNorm(text);
+    var hadPhrase = farewellPhraseIn(norm) !== null && !farewellIsQuestionOrStory(text, norm);
+    var phrase = detectFarewell(text, lastTurnHadFarewell && !sameTurnGrowing);
+    lastTurnHadFarewell = hadPhrase;
+    if (!phrase) {
+      /* He took the farewell back mid-turn ("good night, actually
+         wait…") — cancel the backstop. */
+      if (pendingFarewell) clearPendingFarewell();
+      return;
+    }
+    liveLog('farewell detected: "' + phrase + '"');
+    toolLog('farewell detected: "' + phrase + '"');
+    pendingFarewell = { phrase: phrase, at: Date.now() };
+    if (pendingFarewellT) clearTimeout(pendingFarewellT);
+    pendingFarewellT = setTimeout(function () {
+      pendingFarewellT = null;
+      if (!live.on || endCallCalled) return;
+      liveLog('farewell backstop: no end_call within 10 s — ending the call');
+      endCall();
+    }, 10000);
+  }
+
   async function handleLiveMessage(ev, ws) {
     var data; try { data = JSON.parse(typeof ev.data === 'string' ? ev.data : await ev.data.text()); } catch (e) { return; }
+    /* v2.0.0 §22.2: a dead session processes NOTHING — not even a tool
+       call. Messages queued in live._msgQ keep arriving after stopLive();
+       they are dropped here and logged, never processed. */
+    if (!live.on) { liveLog('dropped post-end message'); return; }
     live.lastServerMsgAt = Date.now(); /* har server message liveness stamp */
+    /* v2.0.0 §22.1: a cancellation is acknowledged and dropped — it is
+       never a call, and it must never resurrect or kill the session. */
+    if (data.toolCallCancellation) {
+      toolLog('toolCallCancellation ignored: ' + JSON.stringify(data.toolCallCancellation));
+      return;
+    }
+    /* v2.0.0 §22.1: toolCall is a TOP-LEVEL oneof member in the Live API —
+       a real function-call message is {"toolCall": {"functionCalls": [...]}}
+       with NO serverContent field. Check it FIRST, before the sc block,
+       and return: a toolCall message carries no transcript, no audio and
+       no serverContent, so there is nothing else in it to process. */
+    if (data.toolCall) {
+      var topCalls = data.toolCall.functionCalls || (data.toolCall.name ? [data.toolCall] : []);
+      for (var tc = 0; tc < topCalls.length; tc++) handleToolCall(topCalls[tc], ws, 'top-level');
+      if (topCalls.length > 0) return;
+    }
     if (data.setupComplete !== undefined) {
       live.setupDone = true; live.retries = 0;
       setStatus('RANI is speaking...'); subEl.textContent = 'Real voice · Gemini Live'; setErr(''); retryBtn.style.display = 'none'; startEq();
@@ -686,15 +863,14 @@
     var sc = data.serverContent;
     if (sc) {
       if (sc.interrupted) { flushPlayback(); }
-      // B-2: the model called a phone tool — run it through the bridge and
-      // send the result straight back as a toolResponse (BADSHAH's pattern).
-      // toolCall lives under serverContent; the top-level shape is checked
-      // too, so a differently-wrapped call is never silently dropped.
+      // Belt-and-braces ONLY: toolCall is a top-level oneof member in the
+      // Live API (see the check at the top of this function); this branch
+      // catches a future API shape that ever nests a tool call under
+      // serverContent. It is a fallback, never the primary path.
       var toolCalls = [];
       if (sc.toolCall && sc.toolCall.functionCalls) toolCalls = sc.toolCall.functionCalls;
-      else if (data.toolCall && data.toolCall.functionCalls) toolCalls = data.toolCall.functionCalls;
-      else if (data.toolCall) toolCalls = [data.toolCall];
-      for (var ti = 0; ti < toolCalls.length; ti++) handleToolCall(toolCalls[ti], ws);
+      else if (sc.toolCall) toolCalls = [sc.toolCall];
+      for (var ti = 0; ti < toolCalls.length; ti++) handleToolCall(toolCalls[ti], ws, 'fallback');
       var parts = (sc.modelTurn && sc.modelTurn.parts) || [];
       for (var i = 0; i < parts.length; i++) {
         if (parts[i].inlineData && parts[i].inlineData.data) playPcm(parts[i].inlineData.data);
@@ -704,13 +880,27 @@
         bridge('onLiveCaption', 'RANI', sc.outputTranscription.text);
         bridge('onTranscript', 'assistant', sc.outputTranscription.text);
         bridge('onLiveState', 'speaking');
+        /* v2.0.0 §22.3: her reply has started, so his turn is finished —
+           evaluate it for a farewell now (turnComplete below is the
+           second evaluation point; the evaluatedUserText guard runs it
+           once). */
+        onUserTurnComplete();
       }
       if (sc.inputTranscription && sc.inputTranscription.text) {
+        var userText = sc.inputTranscription.text;
+        /* v2.0.0 §22.3: a new user turn after a farewell means he kept
+           talking — cancel the backstop, unless this is the same turn
+           still growing (the new text extends the farewell text). */
+        if (pendingFarewell && evaluatedUserText && userText.indexOf(evaluatedUserText) !== 0 && evaluatedUserText.indexOf(userText) !== 0) clearPendingFarewell();
+        lastUserText = userText;
         setCaption('Babu Jaan', sc.inputTranscription.text); setStatus('Listening...');
         bridge('onLiveCaption', 'Babu Jaan', sc.inputTranscription.text);
         bridge('onTranscript', 'user', sc.inputTranscription.text);
         bridge('onLiveState', 'listening');
       }
+      /* v2.0.0 §22.3: the model's reply turn completed — the second
+         evaluation point for the farewell backstop. */
+      if (sc.turnComplete) onUserTurnComplete();
     }
     if (data.goAway) { try { ws.close(); } catch (e) {} /* onclose reconnects — never call scheduleReconnect() here too (double reconnect) */ }
   }
@@ -740,9 +930,12 @@
     }
     return 'That action failed on the phone — tell the user plainly and offer another way.';
   }
-  function handleToolCall(fc, ws) {
+  function handleToolCall(fc, ws, source) {
     if (!fc || !fc.name) return;
     liveLog('TOOL CALL:', fc.name, fc.args);
+    /* v2.0.0 §22.1 diagnostics, stage 1 of 3 (same logcat tag as the
+       bridge stages — "RANI-Live-Tool"). */
+    toolLog('toolCall received' + (source === 'fallback' ? ' (fallback)' : '') + ': ' + fc.name + ' args=' + JSON.stringify(fc.args || {}));
     var result = 'fail';
     try { result = phoneAction(fc.name, fc.args || {}); } catch (e) { result = 'fail'; }
     var text;
@@ -759,9 +952,16 @@
     }
     try {
       ws.send(JSON.stringify({ toolResponse: { functionResponses: [{ id: fc.id || '', name: fc.name, response: { result: text } }] } }));
+      /* v2.0.0 §22.1 diagnostics, stage 3 of 3. */
+      toolLog('toolResponse sent: ' + fc.name + ' result=' + result);
     } catch (e) { liveLog('toolResponse send fail', e); }
+    /* v2.0.0 §22.1 visible fallback: a failed tool is shown AND spoken —
+       the caption covers the case where the model fails to speak the
+       result. Never silence. */
+    var failed = (result === 'notfound' || result === 'fail' || result === 'noaccessibility' || result === 'unsupported' || result === 'nocontacts' || (typeof result === 'string' && result.indexOf('multiple:') === 0));
+    if (failed) showToolFailureCaption(fc.name, fc.args || {}, result);
     // end_call: the response goes out first, then the call ends.
-    if (fc.name === 'end_call' && result === 'ok') { setTimeout(endCall, 400); }
+    if (fc.name === 'end_call' && result === 'ok') { endCallCalled = true; setTimeout(endCall, 400); }
   }
 
   function scheduleReconnect() {
@@ -772,12 +972,21 @@
     if (live.retries >= 8) { setErr('Connection keeps dropping — try again in a little while.'); retryBtn.style.display = 'inline-block'; return; }
     live.retries++;
     setStatus('Reconnecting… (' + live.retries + ')');
-    setTimeout(function () { if (live.on) connectWs(); }, Math.min(600 * live.retries, 3000));
+    /* v2.0.0 §22.2: the timer id is kept so stopLive() can cancel it — a
+       pending reconnect must never fire after the call has ended. */
+    live.reconnectT = setTimeout(function () { live.reconnectT = null; if (live.on) connectWs(); }, Math.min(600 * live.retries, 3000));
   }
 
   /* ----- Teardown (BADSHAH stopEngine + stopAudio) ----- */
   function stopLive() {
     live.on = false; stopEq();
+    clearPendingFarewell();
+    /* v2.0.0 §22.2: drain the queued-message chain and cancel the pending
+       reconnect timer, so nothing queued can fire afterwards. (Messages
+       already in the chain are dropped by the live.on guard at the top of
+       handleLiveMessage.) */
+    live._msgQ = Promise.resolve();
+    if (live.reconnectT) { clearTimeout(live.reconnectT); live.reconnectT = null; }
     if (audioLevelTimer) { clearInterval(audioLevelTimer); audioLevelTimer = null; }
     bridge('onLiveAudioLevel', 0);
     try { live.ws && live.ws.close(); } catch (e) {}
@@ -814,6 +1023,8 @@
       return;
     }
     live.on = true; live.retries = 0; live.setupDone = false; live.greeted = false;
+    /* v2.0.0 §22.3: fresh call, fresh farewell state. */
+    endCallCalled = false; lastUserText = ''; evaluatedUserText = null; lastTurnHadFarewell = false; clearPendingFarewell();
     setStatus('Connecting to Gemini 3.8 Live...'); subEl.textContent = 'Classic voice mode';
     bridge('onLiveState', 'connecting');
     // 15 s watchdog — a hung handshake shows at once.

@@ -49,6 +49,7 @@ import com.badshah222.rani.ai.RaniApp
 import com.badshah222.rani.ai.core.AwarenessCamera
 import com.badshah222.rani.ai.core.AwarenessMonitor
 import com.badshah222.rani.ai.core.CallEngineHolder
+import com.badshah222.rani.ai.core.FarewellDetector
 import com.badshah222.rani.ai.core.FloatingOrbService
 import com.badshah222.rani.ai.core.LiveState
 import com.badshah222.rani.ai.core.RaniAccessibilityService
@@ -559,6 +560,79 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
         when { e != null -> CharState.Error; l -> CharState.Listening; b -> CharState.Thinking; w -> CharState.Working; s -> CharState.Speaking; else -> CharState.Idle }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), CharState.Idle)
 
+    /** v2.0.0 §22.3 native farewell safety net (the page backstop is
+     *  primary). Runs on the SAME LiveState.transcript collector that
+     *  feeds memory — no new listener. A "user" turn is judged final
+     *  when the speaker switches to "assistant" (the model started
+     *  replying); partial transcripts that only grow are never judged.
+     *  If it fires and the call is STILL active 15 s later — and she has
+     *  since spoken a goodbye, or no new user speech arrived — the same
+     *  end path runs (stopLiveSession). Never ends mid-sentence, never
+     *  before she has had her turn to speak. Reset whenever a call ends
+     *  (see the LiveState.active collector in init), so a farewell from
+     *  one call can never fire the net in the next call. */
+    private var farewellLastUserText = ""
+    private var farewellLastSpeaker = ""
+    private var farewellPrevHadFarewell = false
+    private var farewellJob: kotlinx.coroutines.Job? = null
+    private var farewellUserTurns = 0
+    private var farewellAssistantSaidGoodbye = false
+
+    private fun resetFarewellNet() {
+        farewellJob?.cancel()
+        farewellJob = null
+        farewellLastUserText = ""
+        farewellLastSpeaker = ""
+        farewellPrevHadFarewell = false
+        farewellUserTurns = 0
+        farewellAssistantSaidGoodbye = false
+    }
+
+    private fun onLiveTurnForFarewell(who: String, text: String) {
+        if (who == "user") {
+            // A new user turn cancels a pending farewell — unless it is
+            // the same turn still growing (the new text extends the old
+            // one, or the old one extends the new one).
+            if (farewellJob != null && text != farewellLastUserText &&
+                !text.startsWith(farewellLastUserText) && !farewellLastUserText.startsWith(text)
+            ) {
+                farewellJob?.cancel()
+                farewellJob = null
+                farewellAssistantSaidGoodbye = false
+            }
+            farewellLastUserText = text
+            farewellUserTurns++
+            farewellLastSpeaker = "user"
+            return
+        }
+        // Assistant turn.
+        if (FarewellDetector.isGoodbye(text)) farewellAssistantSaidGoodbye = true
+        if (farewellLastSpeaker == "user" && farewellLastUserText.isNotBlank()) {
+            val turnText = farewellLastUserText
+            val fired = FarewellDetector.detect(turnText, farewellPrevHadFarewell)
+            val norm = FarewellDetector.normalize(turnText)
+            farewellPrevHadFarewell = FarewellDetector.phraseIn(norm) != null &&
+                !FarewellDetector.isQuestionOrStory(turnText, norm)
+            if (fired != null && farewellJob == null) {
+                val turnsAtFire = farewellUserTurns
+                farewellJob = viewModelScope.launch {
+                    kotlinx.coroutines.delay(15_000)
+                    // The page backstop (10 s) normally ends the call
+                    // first; this net only fires if the call is STILL
+                    // active and she has said goodbye, or he has said
+                    // nothing since.
+                    if (LiveState.active.value &&
+                        (farewellAssistantSaidGoodbye || farewellUserTurns == turnsAtFire)
+                    ) {
+                        stopLiveSession()
+                    }
+                    farewellJob = null
+                }
+            }
+        }
+        farewellLastSpeaker = "assistant"
+    }
+
     init {
         // RANI chats on the user's own keys (Gemini default). No built-in engine.
         if (uid.isNotEmpty()) messages.value = c.chats.load(uid)
@@ -575,6 +649,8 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             LiveState.active.collect { active ->
                 if (!active) {
                     liveLaunchAtMs = 0L
+                    // v2.0.0 §22.3: a call ending resets the farewell net.
+                    resetFarewellNet()
                     c.memory.finalizeSession("live_call")
                 }
             }
@@ -617,6 +693,9 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
                 // v1.9.0 §21.2: Live turns feed the SAME memory store as
                 // typed chats (finalized when the call ends).
                 c.memory.recordTurn("live_call", who, t.text)
+                // v2.0.0 §22.3: native farewell safety net — same
+                // subscription, no new listener.
+                onLiveTurnForFarewell(who, t.text)
                 if (who == "user" && c.store.emotionId == null) {
                     applyEmotion(Emotions.detect(t.text))
                 }

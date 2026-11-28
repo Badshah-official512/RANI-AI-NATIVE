@@ -69,6 +69,7 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     // S-7: live state comes from the shared LiveState (fed by the RaniBridge
     // from the bundled Live page) — the dead HttpLiveSession is never read.
     val liveState by LiveState.state.collectAsState()
+    val liveActive by LiveState.active.collectAsState()
     val liveMuted by LiveState.muted.collectAsState()
     val liveCaption by LiveState.caption.collectAsState()
     val liveCaptionWho by LiveState.captionWho.collectAsState()
@@ -83,24 +84,38 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
     // call window can appear over other apps.
     BackHandler { vm.minimizeCall(); onBack() }
 
-    fun begin() {
+    // v2.0.0 §22.2: NO auto-start. A live call starts ONLY from an
+    // explicit Start Call tap (button below). Opening this screen shows
+    // the idle state — navigating here from Chat after ending a call must
+    // never start a new call by itself. The classic call still runs on
+    // this screen, so it still starts on open when live is unavailable.
+    var pendingStartLive by remember { mutableStateOf(false) }
+    fun startLiveTapped() {
         if (started) return; started = true
-        // v1.8.0 §20.1.4: the call lives on the Home hero — start it, then
-        // go back to Home where it runs. A call already live needs nothing
-        // more than the trip back to Home (no second socket, no second
-        // WebView — startLiveSession() guards that too). The classic call
-        // (liveMode false) still runs on this screen as before.
-        if (liveMode) {
-            if (!LiveState.active.value) vm.startLiveSession()
-            onBack()
-        } else vm.requestCall()
+        // The call lives on the Home hero — start it, then go back to Home
+        // where it runs. startLiveSession() guards a second socket.
+        vm.startLiveSession()
+        onBack()
+    }
+    fun beginClassic() {
+        if (started) return; started = true
+        vm.requestCall()
     }
     val micPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
-        if (ok) begin() else vm.status.value = "Microphone permission denied. Open Permissions to enable it."
+        if (ok) {
+            if (pendingStartLive) { pendingStartLive = false; startLiveTapped() }
+            else if (!liveMode) beginClassic()
+        } else vm.status.value = "Microphone permission denied. Open Permissions to enable it."
+    }
+    fun onStartCallTap() {
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startLiveTapped()
+        else { pendingStartLive = true; micPerm.launch(Manifest.permission.RECORD_AUDIO) }
     }
     LaunchedEffect(Unit) {
-        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) begin()
-        else micPerm.launch(Manifest.permission.RECORD_AUDIO)
+        if (!liveMode) {
+            if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) beginClassic()
+            else micPerm.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
     // Classic call loop: if the recognizer drops, reopen the mic at once — the call stays
     // alive, listening and replying turn by turn, until the Boss himself presses End.
@@ -258,10 +273,17 @@ fun VoiceScreen(vm: HomeViewModel, onBack: () -> Unit) {
             Spacer(Modifier.weight(1f))
             Row(Modifier.fillMaxWidth().padding(bottom = 18.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.Top) {
                 if (liveMode) {
-                    // S-7: Mute goes through HomeViewModel → the page
-                    // (window.setRaniMuted), not the dead engine.
-                    ControlButton(if (liveMuted) Icons.Default.Mic else Icons.Default.MicOff, if (liveMuted) "Unmute" else "Mute", Panel2, Color.White) { vm.setLiveMuted(!liveMuted) }
-                    ControlButton(Icons.Default.CallEnd, "End", Bad, Color.White, big = true) { vm.stopLiveSession(); onBack() }
+                    if (liveActive) {
+                        // S-7: Mute goes through HomeViewModel → the page
+                        // (window.setRaniMuted), not the dead engine.
+                        ControlButton(if (liveMuted) Icons.Default.Mic else Icons.Default.MicOff, if (liveMuted) "Unmute" else "Mute", Panel2, Color.White) { vm.setLiveMuted(!liveMuted) }
+                        ControlButton(Icons.Default.CallEnd, "End", Bad, Color.White, big = true) { vm.stopLiveSession(); onBack() }
+                    } else {
+                        // v2.0.0 §22.2: idle state — an explicit Start Call
+                        // button (Stonic style). A call starts ONLY from
+                        // this tap, never from opening the screen.
+                        ControlButton(Icons.Default.Call, "Start Call", Violet, Color.White, big = true) { onStartCallTap() }
+                    }
                 } else {
                     ControlButton(if (callMuted) Icons.Default.Mic else Icons.Default.MicOff, if (callMuted) "Unmute" else "Mute", Panel2, Color.White) { vm.setCallMuted(!callMuted) }
                     ControlButton(Icons.Default.CallEnd, "End", Bad, Color.White, big = true) { vm.endCall(); onBack() }

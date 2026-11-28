@@ -12,6 +12,7 @@ import android.os.Looper
 import android.provider.AlarmClock
 import android.provider.MediaStore
 import android.provider.Settings
+import android.util.Log
 import android.webkit.JavascriptInterface
 import com.badshah222.rani.ai.data.phone.ContactsHelper
 import org.json.JSONArray
@@ -55,8 +56,15 @@ class RaniLiveBridge(
     /** Held audio-focus request (BADSHAH micTakeover pattern) — released by releaseMic(). */
     private var audioFocusReq: AudioFocusRequest? = null
 
+    /** v2.0.0 §22.2 ended-latch: after CallEngine.end() sets isActive=false,
+     *  no stale page callback may set LiveState.active=true ever again.
+     *  The engine is the single source of truth for "is a call alive";
+     *  a null engine (no call engine exists) does not block — the latch
+     *  only bites once a call has existed and ended. onCallEnded only
+     *  ever clears state, so it needs no latch. */
     @JavascriptInterface
     fun onLiveConnected() {
+        if (CallEngineHolder.engine?.isActive == false) return
         LiveState.onConnected()
         mainHandler.post { runCatching { onConnected() } }
     }
@@ -73,6 +81,7 @@ class RaniLiveBridge(
      *  floating card all read. */
     @JavascriptInterface
     fun onLiveState(state: String) {
+        if (CallEngineHolder.engine?.isActive == false) return
         LiveState.setState(state)
     }
 
@@ -93,7 +102,17 @@ class RaniLiveBridge(
      *  emotion DURING the call, with no tap and no restart. */
     @JavascriptInterface
     fun onTranscript(who: String, text: String) {
+        if (CallEngineHolder.engine?.isActive == false) return
         LiveState.onTranscript(who, text)
+    }
+
+    /** v2.0.0 §22.1 diagnostics: the page's tool-call stages reach logcat
+     *  on the SAME tag as the bridge's own stages ("RANI-Live-Tool"), so
+     *  one `adb logcat` grep tells the whole story: "toolCall received"
+     *  -> "tool dispatched" -> "toolResponse sent". */
+    @JavascriptInterface
+    fun toolLog(msg: String) {
+        Log.d("RANI-Live-Tool", msg)
     }
 
     /** v1.8.0 §20.2.5: live output audio level 0..1 from the page's 100 ms
@@ -124,7 +143,10 @@ class RaniLiveBridge(
             return ""
         }
         val svc = RaniAccessibilityService.instance
-        return try {
+        // v2.0.0 §22.1 diagnostics, stage 2 of 3 (same logcat tag as the
+        // page stages — "RANI-Live-Tool").
+        Log.d("RANI-Live-Tool", "tool dispatched: $action -> raniPhoneAction")
+        val result = try {
             when (action) {
                 // v1.9.0 §21.1: chain on FAILURE, not on null — the service
                 // result is only kept when it actually worked ("ok") or
@@ -166,6 +188,11 @@ class RaniLiveBridge(
                 else -> "unknown"
             }
         } catch (e: Exception) { "fail" }
+        // v2.0.0 §22.1 diagnostics: the bridge logs the same result string
+        // it returned, so "dispatched" with no "result" means the bridge
+        // swallowed the call.
+        Log.d("RANI-Live-Tool", "tool result: $action = $result")
+        return result
     }
 
     /** v1.9.0 §21.1: keep the service result only when it worked or asked

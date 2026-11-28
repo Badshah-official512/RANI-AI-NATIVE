@@ -78,7 +78,7 @@ class CallEngine(private val activity: MainActivity) {
      * Creates the WebView ONCE per call, with the MainActivity context
      * (never a Compose context), the factory settings copied verbatim
      * from HeroLiveWebView, the SAME shared RaniLiveBridge, and the SAME
-     * URL (+ v=1.9.0, &memory=, &pet=). Refuses a second start while one
+     * URL (+ v=2.0.0, &memory=, &pet=). Refuses a second start while one
      * is active (the N-2 guard, now enforced in the engine).
      */
     fun start(key: String, voice: String, memory: String, petName: String): Boolean {
@@ -86,7 +86,7 @@ class CallEngine(private val activity: MainActivity) {
         triedReload = false
         currentUrl = "file:///android_asset/rani-live.html?key=" + URLEncoder.encode(key, "UTF-8") +
             "&voice=" + URLEncoder.encode(voice, "UTF-8") +
-            "&model=gemini-3.8-live&v=1.9.0&embed=1" +
+            "&model=gemini-3.8-live&v=2.0.0&embed=1" +
             "&memory=" + URLEncoder.encode(memory, "UTF-8") +
             "&pet=" + URLEncoder.encode(petName, "UTF-8")
         val url = currentUrl
@@ -243,7 +243,21 @@ class CallEngine(private val activity: MainActivity) {
     fun currentWebView(): WebView? = webView
 
     /** Destroy the WebView — ONLY on an explicit End. Never on navigation,
-     *  rotation or recomposition. */
+     *  rotation or recomposition.
+     *
+     *  v2.0.0 §22.2: the 400 ms delayed destroy is GONE. That delay was the
+     *  window in which stale page callbacks resurrected LiveState after
+     *  end (the bridge stayed attached until removeJavascriptInterface,
+     *  and a pending scheduleReconnect could still fire). The WebView is
+     *  destroyed SYNCHRONOUSLY on the main thread now: the JS interface
+     *  is removed first so no page JS can reach the bridge afterwards,
+     *  and LiveState.onEnded() is forced after destroy completes — the
+     *  authoritative final clear that nothing after it can undo (the
+     *  bridge ended-latch blocks anything later). The page's own teardown
+     *  is best-effort here (evaluateJavascript is async and may not run
+     *  before destroy); the socket dies with the WebView and the mic is
+     *  released natively, so nothing is lost. After end() returns, no
+     *  page JS and no timer can reach LiveState again. */
     fun end(fromPage: Boolean = false) {
         val wv = webView ?: return
         webView = null
@@ -258,16 +272,12 @@ class CallEngine(private val activity: MainActivity) {
             }
             // Mic release is immediate (and must run on the main thread).
             runCatching { b?.releaseMic() }
-            // F8: evaluateJavascript is async — destroying the WebView in
-            // the same block could land first, so the page's teardown
-            // (socket close, mic release) never ran. Give it ~400 ms.
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                runCatching { wv.stopLoading() }
-                runCatching { wv.loadUrl("about:blank") }
-                runCatching { wv.removeJavascriptInterface("RaniApp") }
-                runCatching { (wv.parent as? ViewGroup)?.removeView(wv) }
-                runCatching { wv.destroy() }
-            }, 400)
+            runCatching { wv.removeJavascriptInterface("RaniApp") }
+            runCatching { wv.stopLoading() }
+            runCatching { wv.loadUrl("about:blank") }
+            runCatching { (wv.parent as? ViewGroup)?.removeView(wv) }
+            runCatching { wv.destroy() }
+            LiveState.onEnded()
         }
     }
 
